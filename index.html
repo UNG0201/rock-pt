@@ -1151,8 +1151,8 @@ function exportPTImage(pts){
     ctx.fillText(pt.name, x + colW/2, groupTop + 16);
     ctx.textAlign = 'left';
 
-    const colRole = 50, colCheck = 24, colName = 130, colJob = colW - colRole - colCheck - 130;
-    const headers = ['役割','','名　前','職'];
+    const colRole = 50, colCheck = 36, colName = 130, colJob = colW - colRole - colCheck - 130;
+    const headers = ['役割','PTL','名　前','職'];
     const colWidths = [colRole, colCheck, colName, colJob];
 
     let cy = groupTop + ptTitleH;
