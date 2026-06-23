@@ -678,7 +678,21 @@ function addPerson(job, name){
 function computeAssignment(list){
   const totalPeople = list.length;
   const MIN_PT_COUNT = 2;
-  const ptCount = Math.max(MIN_PT_COUNT, Math.ceil(totalPeople / 8));
+
+  // PT count must be enough to fit everyone overall AND enough to fit the most
+  // numerous role (e.g. 3 ヲロ need at least 3 PTs, since each PT only has 1 ヲロ slot).
+  const roleCounts = {};
+  ROLE_ORDER.forEach(r => roleCounts[r] = 0);
+  list.forEach(p => { if(roleCounts.hasOwnProperty(p.role)) roleCounts[p.role]++; });
+
+  let ptCountForRoles = MIN_PT_COUNT;
+  ROLE_ORDER.forEach(role => {
+    const perPT = ROLE_COUNT_PER_PT[role] || 1;
+    const neededForRole = Math.ceil(roleCounts[role] / perPT);
+    if(neededForRole > ptCountForRoles) ptCountForRoles = neededForRole;
+  });
+
+  const ptCount = Math.max(MIN_PT_COUNT, Math.ceil(totalPeople / 8), ptCountForRoles);
   const pts = [];
   for(let i=0;i<ptCount;i++){
     pts.push({ name: PT_NAMES[i] || ('第'+(i+1)+'PT'), slots: SLOT_TEMPLATE.map(role=>({role, person:null})) });
