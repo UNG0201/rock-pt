@@ -231,13 +231,21 @@
   .pt-status.ready{ background: rgba(212,175,106,0.15); color: var(--gold); }
 
   .slot-row{
-    display:grid; grid-template-columns: 52px 1fr 56px; gap:8px;
+    display:grid; grid-template-columns: 52px 28px 1fr 56px; gap:8px;
     align-items:center; padding:6px 0;
   }
   .slot-role{
     font-size:11px; font-weight:700; text-align:center; padding:5px 0;
     border-radius:5px;
   }
+  .ptl-check{
+    display:flex; align-items:center; justify-content:center;
+    width:28px; height:28px; cursor:pointer;
+  }
+  .ptl-check input[type="checkbox"]{
+    width:20px; height:20px; cursor:pointer; accent-color: var(--gold);
+  }
+  .ptl-check-spacer{ display:block; }
   .slot-name{
     background: var(--bg-slot); border:1px solid var(--line);
     border-radius:5px; padding:7px 10px; font-size:13px; min-height:18px;
@@ -669,7 +677,8 @@ function addPerson(job, name){
 
 function computeAssignment(list){
   const totalPeople = list.length;
-  const ptCount = Math.max(1, Math.ceil(totalPeople / 8));
+  const MIN_PT_COUNT = 2;
+  const ptCount = Math.max(MIN_PT_COUNT, Math.ceil(totalPeople / 8));
   const pts = [];
   for(let i=0;i<ptCount;i++){
     pts.push({ name: PT_NAMES[i] || ('第'+(i+1)+'PT'), slots: SLOT_TEMPLATE.map(role=>({role, person:null})) });
@@ -782,9 +791,15 @@ function renderPTGrid(){
         </div>
         ${pt.slots.map((slot, slotIdx)=>{
           const isPinned = !!(slot.person && slot.person.pinnedPT != null);
+          const isPTL = !!(slot.person && slot.person.isPTL);
           return `
           <div class="slot-row">
             <span class="slot-role ${ROLE_CLASS[slot.role]}">${slot.role}</span>
+            ${slot.person ? `
+              <label class="ptl-check" title="PTL（リーダー）に指定">
+                <input type="checkbox" class="ptl-checkbox" data-person-id="${slot.person.id}" data-pt-idx="${ptIdx}" ${isPTL ? 'checked' : ''}>
+              </label>
+            ` : '<span class="ptl-check-spacer"></span>'}
             <span class="slot-name ${slot.person ? 'filled' : ''}">${
               slot.person ? `<span class="slot-name-text">${escapeHtml(slot.person.name)}</span><span class="job-tag">${escapeHtml(slot.person.job)}</span>` : '—'
             }</span>
@@ -798,6 +813,55 @@ function renderPTGrid(){
       </div>
     `;
   }).join('');
+
+  grid.querySelectorAll('.ptl-checkbox').forEach(cb=>{
+    cb.addEventListener('change', async ()=>{
+      const personId = cb.dataset.personId;
+      const ptIdx = parseInt(cb.dataset.ptIdx, 10);
+      const checked = cb.checked;
+      const ptSlots = currentPTs[ptIdx] ? currentPTs[ptIdx].slots : [];
+      const ptPersonIds = new Set(ptSlots.filter(s=>s.person).map(s=>s.person.id));
+      const mutator = (latest) => latest.map(p=>{
+        if(p.id === personId) return { ...p, isPTL: checked };
+        // Clear PTL on everyone else within the same PT when setting a new PTL
+        if(checked && ptPersonIds.has(p.id) && p.id !== personId) return { ...p, isPTL: false };
+        return p;
+      });
+      if(isLocked){
+        await withLock(async ()=>{
+          let rawLatest;
+          try{
+            rawLatest = await fetchLatestAppStateRaw();
+          }catch(e){
+            showToast('通信エラーで反映できませんでした。「最新の状態に更新」を押してください');
+            return;
+          }
+          const state = parseAppState(rawLatest);
+          const updatedRoster = mutator(state.roster);
+          // Also reflect PTL status inside the already-locked assignment snapshot
+          const updatedLock = state.lockedAssignment ? state.lockedAssignment.map((pt, i) => ({
+            ...pt,
+            slots: pt.slots.map(slot => {
+              if(!slot.person) return slot;
+              if(slot.person.id === personId) return { ...slot, person: { ...slot.person, isPTL: checked } };
+              if(checked && i === ptIdx && ptPersonIds.has(slot.person.id)) return { ...slot, person: { ...slot.person, isPTL: false } };
+              return slot;
+            })
+          })) : state.lockedAssignment;
+          try{
+            await saveAppState({ roster: updatedRoster, lockedAssignment: updatedLock, eventMeta: state.eventMeta });
+          }catch(e){ showToast('保存に失敗しました'); return; }
+          roster = updatedRoster;
+          lockedAssignment = updatedLock;
+          eventMeta = state.eventMeta;
+          suppressPollUntil = Date.now() + 3000;
+          render();
+        });
+      }else{
+        await mutateRoster(mutator);
+      }
+    });
+  });
 
   if(!isLocked){
     grid.querySelectorAll('.pin-btn').forEach(btn=>{
@@ -1112,7 +1176,7 @@ function exportPTImage(pts){
     pt.slots.forEach((slot)=>{
       cy += rowH;
       cx = x;
-      const cellVals = [slot.role, slot.person ? '○' : '', slot.person ? slot.person.name : '—', slot.person ? slot.person.job : ''];
+      const cellVals = [slot.role, (slot.person && slot.person.isPTL) ? '○' : '', slot.person ? slot.person.name : '—', slot.person ? slot.person.job : ''];
       cellVals.forEach((val, ci)=>{
         ctx.strokeStyle = borderColor;
         ctx.strokeRect(cx, cy, colWidths[ci], rowH);
