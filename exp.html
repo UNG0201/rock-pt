@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>経験値トラッカー</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-0: #f3f2ee;
+    --surface-1: #fcfcfb;
+    --border: #e2e0d8;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #7a7974;
+    --grid: #ecebe5;
+    --series-1: #2a78d6;
+    --accent-bg: #e8f0fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --surface-0: #111110;
+      --surface-1: #1a1a19;
+      --border: #2e2d2a;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #8f8e86;
+      --grid: #2a2a27;
+      --series-1: #3987e5;
+      --accent-bg: #1c2a3d;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-0: #111110; --surface-1: #1a1a19; --border: #2e2d2a;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --grid: #2a2a27; --series-1: #3987e5; --accent-bg: #1c2a3d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface-0); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif;
+    font-size: 15px; line-height: 1.5;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  h1 { font-size: 20px; margin: 0; }
+  .updated { color: var(--text-muted); font-size: 13px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .char-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  .char-name { font-size: 18px; font-weight: 700; }
+  .lv { font-size: 15px; color: var(--text-secondary); }
+  .stale { font-size: 12px; color: #b3261e; }
+  .hero { display: flex; align-items: baseline; gap: 6px; margin: 4px 0 6px; }
+  .hero .num { font-size: 40px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.5px; }
+  .hero .unit { font-size: 18px; color: var(--text-secondary); }
+  .bar { height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; margin-bottom: 14px; }
+  .bar > div { height: 100%; background: var(--series-1); border-radius: 4px; }
+  .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
+  @media (min-width: 640px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .stat .label { font-size: 12px; color: var(--text-muted); }
+  .stat .value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .stat.key .value { font-size: 18px; }
+  .stat.key { background: var(--accent-bg); border-radius: 8px; padding: 6px 10px; }
+  .chart-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 16px 0 8px; }
+  .chart-head h2 { font-size: 15px; margin: 0; }
+  .ranges { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .ranges button {
+    border: 0; background: transparent; color: var(--text-secondary); font: inherit; font-size: 13px;
+    padding: 6px 12px; cursor: pointer; min-height: 32px;
+  }
+  .ranges button[aria-pressed="true"] { background: var(--accent-bg); color: var(--text-primary); font-weight: 600; }
+  .chart-box { position: relative; height: 240px; }
+  .note { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; margin-top: 6px; }
+  th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child { text-align: left; }
+  .msg { color: var(--text-secondary); padding: 24px 0; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>経験値トラッカー</h1>
+    <span class="updated" id="updated"></span>
+  </header>
+  <div id="root"><div class="msg">読み込み中…</div></div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+const DB = "https://rock-pt-default-rtdb.firebaseio.com";
+const HOUR = 3600 * 1000, DAY = 24 * HOUR;
+const RANGES = { "24時間": DAY, "7日": 7 * DAY, "30日": 30 * DAY };
+let currentRange = "7日";
+const charts = {};
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmtInt = n => Number(n).toLocaleString("ja-JP");
+const fmtTime = t => {
+  const d = new Date(t);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+};
+const pctOf = e => e.cur / e.next * 100;
+const fmtJp = n => n >= 1e8 ? `${(n / 1e8).toFixed(1)}億` : n >= 1e4 ? `${(n / 1e4).toFixed(1)}万` : `${Math.round(n)}`;
+
+async function getJson(path) {
+  const r = await fetch(`${DB}/${path}`, { cache: "no-store" });
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
+
+// EXP gained per hour, using the latest level only (a level-up resets current EXP)
+function hourlyGain(log, latest) {
+  const same = log.filter(e => e.lv === latest.lv);
+  for (const win of [DAY, 3 * DAY, 30 * DAY]) {
+    const pts = same.filter(e => e.t >= latest.t - win);
+    if (pts.length < 2) continue;
+    const a = pts[0], b = pts[pts.length - 1];
+    const hours = (b.t - a.t) / HOUR;
+    if (hours < 0.5) continue;
+    return { perHour: (b.cur - a.cur) / hours, hours };
+  }
+  return null;
+}
+
+function render(chars, rate) {
+  const root = document.getElementById("root");
+  if (!chars.length) {
+    root.innerHTML = '<div class="msg">まだデータがありません。PCからの最初の送信をお待ちください。</div>';
+    return;
+  }
+  root.innerHTML = "";
+  for (const c of chars) {
+    const L = c.latest, pct = pctOf(L);
+    const gain = hourlyGain(c.log, L);
+    let gainTxt = "計測中", etaTxt = "計測中";
+    if (gain) {
+      gainTxt = gain.perHour > 0 ? `${fmtJp(gain.perHour)} / 時` : "増加なし";
+      if (gain.perHour > 0) {
+        const days = (L.next - L.cur) / (gain.perHour * 24);
+        etaTxt = days >= 1000 ? `${fmtInt(Math.round(days))} 日` : `${days.toFixed(1)} 日`;
+      } else etaTxt = "—";
+    }
+    const rateTxt = rate && rate.value ? `${rate.value} 倍` : "通常（1倍）";
+    const stale = Date.now() - L.t > 2 * HOUR
+      ? `<span class="stale">⚠ ${Math.floor((Date.now() - L.t) / HOUR)}時間 更新なし</span>` : "";
+
+    const card = document.createElement("section");
+    card.className = "card";
+    card.innerHTML = `
+      <div class="char-head">
+        <span class="char-name">${escapeHtml(L.name || c.id)}</span>
+        <span class="lv">Lv ${L.lv}</span>${stale}
+      </div>
+      <div class="hero"><span class="num">${pct.toFixed(3)}</span><span class="unit">%</span></div>
+      <div class="bar"><div style="width:${Math.min(100, pct)}%"></div></div>
+      <div class="stats">
+        <div class="stat key"><div class="label">レベルアップまで</div><div class="value">${etaTxt}</div></div>
+        <div class="stat"><div class="label">1時間あたり</div><div class="value">${gainTxt}</div></div>
+        <div class="stat"><div class="label">経験値倍率</div><div class="value">${rateTxt}</div></div>
+        <div class="stat"><div class="label">現在経験値</div><div class="value">${fmtInt(L.cur)}</div></div>
+        <div class="stat"><div class="label">次Lv経験値</div><div class="value">${fmtInt(L.next)}</div></div>
+        <div class="stat"><div class="label">最終更新</div><div class="value">${fmtTime(L.t)}</div></div>
+      </div>
+      <div class="chart-head">
+        <h2>経験値の推移（%）</h2>
+        <div class="ranges" role="group" aria-label="期間">
+          ${Object.keys(RANGES).map(k => `<button type="button" data-r="${k}" aria-pressed="${k === currentRange}">${k}</button>`).join("")}
+        </div>
+      </div>
+      <div class="chart-box"><canvas aria-label="経験値の推移"></canvas></div>
+      <div class="note">レベルが上がった時点で%は0に戻ります。予想日数は現在のレベルでの直近の稼ぎから計算しています。</div>
+      <details><summary>記録の一覧（直近20件）</summary><div class="tbl"></div></details>`;
+    root.appendChild(card);
+
+    card.querySelectorAll(".ranges button").forEach(b => b.addEventListener("click", () => {
+      currentRange = b.dataset.r;
+      render(chars, rate);
+    }));
+
+    const rows = c.log.slice(-20).reverse();
+    card.querySelector(".tbl").innerHTML = `<table>
+      <thead><tr><th>日時</th><th>Lv</th><th>%</th><th>現在経験値</th></tr></thead>
+      <tbody>${rows.map(e => `<tr><td>${fmtTime(e.t)}</td><td>${e.lv}</td><td>${pctOf(e).toFixed(3)}</td><td>${fmtInt(e.cur)}</td></tr>`).join("")}</tbody>
+    </table>`;
+
+    drawChart(c.id, card.querySelector("canvas"), c.log);
+  }
+}
+
+function drawChart(id, canvas, log) {
+  const from = Date.now() - RANGES[currentRange];
+  const pts = log.filter(e => e.t >= from);
+  // break the line at level-ups so the drop to 0% is not drawn as a slope
+  const data = [];
+  pts.forEach((e, i) => {
+    if (i > 0 && e.lv !== pts[i - 1].lv) data.push({ x: e.t - 1, y: null });
+    data.push({ x: e.t, y: +pctOf(e).toFixed(3), lv: e.lv });
+  });
+  if (charts[id]) charts[id].destroy();
+  const series = css("--series-1"), grid = css("--grid"), muted = css("--text-muted"), surface = css("--surface-1");
+  charts[id] = new Chart(canvas, {
+    type: "line",
+    data: { datasets: [{
+      data, borderColor: series, backgroundColor: series, borderWidth: 2,
+      pointRadius: data.length > 60 ? 0 : 3, pointHoverRadius: 5,
+      pointBorderColor: surface, pointBorderWidth: 2, spanGaps: false, tension: 0
+    }]},
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: items => fmtTime(items[0].parsed.x),
+            label: item => `Lv ${item.raw.lv}  ${item.parsed.y.toFixed(3)}%`
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: "linear", min: from, max: Date.now(),
+          grid: { color: grid }, border: { display: false },
+          ticks: { color: muted, maxTicksLimit: 6, maxRotation: 0, callback: v => fmtTime(v) }
+        },
+        y: {
+          grid: { color: grid }, border: { display: false },
+          ticks: { color: muted, maxTicksLimit: 5, callback: v => `${v}%` }
+        }
+      }
+    }
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+async function load() {
+  try {
+    const top = await getJson("exp.json?shallow=true") || {};
+    const ids = Object.keys(top).filter(k => !k.startsWith("_"));
+    const rate = await getJson("exp/_rate.json").catch(() => null);
+    const chars = [];
+    for (const id of ids) {
+      const [latest, logObj] = await Promise.all([
+        getJson(`exp/${id}/latest.json`),
+        getJson(`exp/${id}/log.json?orderBy="$key"&limitToLast=1500`)
+      ]);
+      if (!latest) continue;
+      const log = Object.values(logObj || {}).filter(e => e && e.t).sort((a, b) => a.t - b.t);
+      chars.push({ id, latest, log });
+    }
+    render(chars, rate);
+    document.getElementById("updated").textContent = `表示更新 ${fmtTime(Date.now())}`;
+  } catch (e) {
+    document.getElementById("root").innerHTML =
+      `<div class="msg">データを読み込めませんでした（${escapeHtml(e.message)}）。<br>Firebaseのルールに「exp」が追加されているか確認してください。</div>`;
+  }
+}
+
+load();
+setInterval(load, 5 * 60 * 1000);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", load);
+</script>
+</body>
+</html>
