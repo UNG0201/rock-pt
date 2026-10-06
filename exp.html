@@ -62,6 +62,7 @@
   .stat .label { font-size: 12px; color: var(--text-muted); }
   .stat .value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .stat.key .value { font-size: 18px; }
+  .stat .sub { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
   .stat.key { background: var(--accent-bg); border-radius: 8px; padding: 6px 10px; }
   .chart-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 16px 0 8px; }
   .chart-head h2 { font-size: 15px; margin: 0; }
@@ -78,6 +79,19 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; margin-top: 6px; }
   th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--grid); }
   th:first-child, td:first-child { text-align: left; }
+  .ss { margin: 16px 0 0; }
+  .ss img { display: block; width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); cursor: zoom-in; }
+  .ss figcaption { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: none; align-items: center; justify-content: center; z-index: 10; overflow: auto; }
+  .lightbox.open { display: flex; }
+  .lightbox img { max-width: none; width: auto; height: auto; max-height: 100vh; cursor: zoom-out; }
+  @media (max-width: 640px) { .lightbox { align-items: flex-start; justify-content: flex-start; } .lightbox img { max-height: none; } }
+  h3.sec { font-size: 15px; margin: 18px 0 8px; }
+  .box-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin-top: 8px; }
+  .box-form label { font-size: 12px; color: var(--text-muted); display: block; }
+  .box-form input { width: 100%; font: inherit; font-size: 16px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-0); color: var(--text-primary); }
+  .box-form button { grid-column: 1 / -1; font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--accent-bg); color: var(--text-primary); cursor: pointer; min-height: 40px; }
+  .box-form .saved { grid-column: 1 / -1; font-size: 12px; color: var(--text-muted); }
   .msg { color: var(--text-secondary); padding: 24px 0; text-align: center; }
 </style>
 </head>
@@ -89,6 +103,7 @@
   </header>
   <div id="root"><div class="msg">読み込み中…</div></div>
 </main>
+<div class="lightbox" id="lightbox" role="dialog" aria-label="スクリーンショット拡大"><img alt="スクリーンショット拡大"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
@@ -97,6 +112,9 @@ const HOUR = 3600 * 1000, DAY = 24 * HOUR;
 const RANGES = { "24時間": DAY, "7日": 7 * DAY, "30日": 30 * DAY };
 let currentRange = "7日";
 const charts = {};
+// パンドラの箱: defaults until set on the page (from the spreadsheet: 148 s/box, 6倍 = 889,333,368 per box)
+const BOX_DEFAULT = { sec: 148, exp: { "6": 889333368, "8": 1020117688, "10": 1098588284 } };
+const rateKey = r => String(r || 1).replace(".", "_");
 
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const fmtInt = n => Number(n).toLocaleString("ja-JP");
@@ -106,6 +124,11 @@ const fmtTime = t => {
 };
 const pctOf = e => e.cur / e.next * 100;
 const fmtJp = n => n >= 1e8 ? `${(n / 1e8).toFixed(1)}億` : n >= 1e4 ? `${(n / 1e4).toFixed(1)}万` : `${Math.round(n)}`;
+
+async function putJson(path, value) {
+  const r = await fetch(`${DB}/${path}`, { method: "PUT", body: JSON.stringify(value) });
+  if (!r.ok) throw new Error(`${r.status}`);
+}
 
 async function getJson(path) {
   const r = await fetch(`${DB}/${path}`, { cache: "no-store" });
@@ -127,7 +150,38 @@ function hourlyGain(log, latest) {
   return null;
 }
 
-function render(chars, rate) {
+// Macro running time per day: records arrive about every 30 min only while the
+// attack macro runs, so gaps up to RUN_GAP count as running time.
+const RUN_GAP = 45 * 60 * 1000;
+function runHoursPerDay(log) {
+  const now = Date.now();
+  const pts = log.filter(e => e.t >= now - 7 * DAY);
+  if (pts.length < 2) return null;
+  let run = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const gap = pts[i].t - pts[i - 1].t;
+    if (gap <= RUN_GAP) run += gap;
+  }
+  const tail = now - pts[pts.length - 1].t;
+  if (tail <= RUN_GAP) run += tail;
+  const span = now - pts[0].t;
+  if (span < HOUR) return null;
+  return { hours: run / span * 24, days: span / DAY };
+}
+
+function boxStats(L, rate, box, gain, log) {
+  const sec = Number(box.sec) || 0;
+  const per = Number((box.exp || {})[rateKey(rate && rate.value)]) || 0;
+  const run = runHoursPerDay(log);
+  const full = sec > 0 ? 86400 / sec : 0;
+  const perDay = sec > 0 && run ? run.hours * 3600 / sec : 0;
+  const dayPct = per && perDay ? per * perDay / L.next * 100 : null;
+  // measured: seconds per box from the real EXP gain
+  const realSec = per && gain && gain.perHour > 0 ? per / (gain.perHour / 3600) : null;
+  return { sec, per, perDay, full, run, dayPct, totalDays: dayPct ? 100 / dayPct : null, realSec };
+}
+
+function render(chars, rate, box) {
   const root = document.getElementById("root");
   if (!chars.length) {
     root.innerHTML = '<div class="msg">まだデータがありません。PCからの最初の送信をお待ちください。</div>';
@@ -145,7 +199,10 @@ function render(chars, rate) {
         etaTxt = days >= 1000 ? `${fmtInt(Math.round(days))} 日` : `${days.toFixed(1)} 日`;
       } else etaTxt = "—";
     }
-    const rateTxt = rate && rate.value ? `${rate.value} 倍` : "通常（1倍）";
+    const rateTxt = rate && rate.value > 1 ? `${rate.value} 倍` : "通常（1倍）";
+    const bx = boxStats(L, rate, box, gain, c.log);
+    const rateLabel = rate && rate.value > 1 ? `${rate.value}倍` : "1倍";
+    const rateSub = rate && rate.value > 1 && rate.end ? `<div class="sub">${escapeHtml(rate.end)} まで</div>` : "";
     const stale = Date.now() - L.t > 2 * HOUR
       ? `<span class="stale">⚠ ${Math.floor((Date.now() - L.t) / HOUR)}時間 更新なし</span>` : "";
 
@@ -161,11 +218,28 @@ function render(chars, rate) {
       <div class="stats">
         <div class="stat key"><div class="label">レベルアップまで</div><div class="value">${etaTxt}</div></div>
         <div class="stat"><div class="label">1時間あたり</div><div class="value">${gainTxt}</div></div>
-        <div class="stat"><div class="label">経験値倍率</div><div class="value">${rateTxt}</div></div>
+        <div class="stat"><div class="label">経験値倍率</div><div class="value">${rateTxt}</div>${rateSub}</div>
         <div class="stat"><div class="label">現在経験値</div><div class="value">${fmtInt(L.cur)}</div></div>
         <div class="stat"><div class="label">次Lv経験値</div><div class="value">${fmtInt(L.next)}</div></div>
         <div class="stat"><div class="label">最終更新</div><div class="value">${fmtTime(L.t)}</div></div>
       </div>
+      <h3 class="sec">パンドラの箱（${rateLabel}）</h3>
+      <div class="stats">
+        <div class="stat"><div class="label">箱あけペース</div><div class="value">${bx.sec ? `${bx.sec} 秒毎` : "未設定"}</div>${bx.realSec ? `<div class="sub">実測 ${bx.realSec.toFixed(0)} 秒毎</div>` : ""}</div>
+        <div class="stat"><div class="label">1日使用量</div><div class="value">${bx.perDay ? `${bx.perDay.toFixed(2)} 箱` : "計測中"}</div>${bx.run ? `<div class="sub">稼働 ${bx.run.hours.toFixed(1)} 時間/日（直近${bx.run.days < 1 ? `${Math.round(bx.run.days * 24)}時間` : `${bx.run.days.toFixed(1)}日`}）</div>` : ""}${bx.full ? `<div class="sub">24時間なら ${bx.full.toFixed(2)} 箱</div>` : ""}</div>
+        <div class="stat"><div class="label">1日予想</div><div class="value">${bx.dayPct != null ? `${bx.dayPct.toFixed(2)} %` : "計測中"}</div></div>
+        <div class="stat"><div class="label">次レベルまでの総日数</div><div class="value">${bx.totalDays != null ? `${Math.round(bx.totalDays)} 日` : "計測中"}</div></div>
+        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(bx.per) : "未設定"}</div></div>
+      </div>
+      <details class="box-set"><summary>箱の設定を変える</summary>
+        <form class="box-form">
+          <div><label>箱あけ秒数</label><input name="sec" type="number" inputmode="decimal" step="any" min="1" value="${bx.sec || ""}"></div>
+          <div><label>箱1個の経験値（${rateLabel}）</label><input name="exp" type="number" inputmode="numeric" min="0" value="${bx.per || ""}"></div>
+          <button type="submit">保存</button>
+          <div class="saved"></div>
+        </form>
+      </details>
+      ${c.ss && c.ss.img ? `<figure class="ss"><img alt="ゲーム画面" src="data:image/jpeg;base64,${c.ss.img}"><figcaption>ゲーム画面 ${fmtTime(c.ss.t)} 撮影（タップで拡大）</figcaption></figure>` : ""}
       <div class="chart-head">
         <h2>経験値の推移（%）</h2>
         <div class="ranges" role="group" aria-label="期間">
@@ -179,8 +253,28 @@ function render(chars, rate) {
 
     card.querySelectorAll(".ranges button").forEach(b => b.addEventListener("click", () => {
       currentRange = b.dataset.r;
-      render(chars, rate);
+      render(chars, rate, box);
     }));
+
+    const img = card.querySelector(".ss img");
+    if (img) img.addEventListener("click", () => {
+      const lb = document.getElementById("lightbox");
+      lb.querySelector("img").src = img.src;
+      lb.classList.add("open");
+    });
+    card.querySelector(".box-form").addEventListener("submit", async ev => {
+      ev.preventDefault();
+      const f = ev.target, msg = f.querySelector(".saved");
+      const sec = Number(f.sec.value), exp = Number(f.exp.value);
+      if (!(sec > 0) || !(exp >= 0)) { msg.textContent = "数字を入れてください"; return; }
+      msg.textContent = "保存中…";
+      try {
+        await putJson("exp/_box/sec.json", sec);
+        await putJson(`exp/_box/exp/${rateKey(rate && rate.value)}.json`, exp);
+        box.sec = sec; box.exp = { ...(box.exp || {}), [rateKey(rate && rate.value)]: exp };
+        render(chars, rate, box);
+      } catch (e) { msg.textContent = `保存できませんでした（${e.message}）`; }
+    });
 
     const rows = c.log.slice(-20).reverse();
     card.querySelector(".tbl").innerHTML = `<table>
@@ -246,17 +340,22 @@ async function load() {
     const top = await getJson("exp.json?shallow=true") || {};
     const ids = Object.keys(top).filter(k => !k.startsWith("_"));
     const rate = await getJson("exp/_rate.json").catch(() => null);
+    const saved = await getJson("exp/_box.json").catch(() => null) || {};
+    const box = { sec: saved.sec ?? BOX_DEFAULT.sec, exp: { ...BOX_DEFAULT.exp, ...(saved.exp || {}) } };
     const chars = [];
     for (const id of ids) {
-      const [latest, logObj] = await Promise.all([
+      const [latest, logObj, ss] = await Promise.all([
         getJson(`exp/${id}/latest.json`),
-        getJson(`exp/${id}/log.json?orderBy="$key"&limitToLast=1500`)
+        getJson(`exp/${id}/log.json?orderBy="$key"&limitToLast=1500`),
+        getJson(`exp/${id}/ss.json`).catch(() => null)
       ]);
       if (!latest) continue;
       const log = Object.values(logObj || {}).filter(e => e && e.t).sort((a, b) => a.t - b.t);
-      chars.push({ id, latest, log });
+      chars.push({ id, latest, log, ss });
     }
-    render(chars, rate);
+    // keep an open settings form open across the 5-minute reload
+    if (document.querySelector(".box-set[open]")) return;
+    render(chars, rate, box);
     document.getElementById("updated").textContent = `表示更新 ${fmtTime(Date.now())}`;
   } catch (e) {
     document.getElementById("root").innerHTML =
@@ -264,6 +363,7 @@ async function load() {
   }
 }
 
+document.getElementById("lightbox").addEventListener("click", e => e.currentTarget.classList.remove("open"));
 load();
 setInterval(load, 5 * 60 * 1000);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", load);
