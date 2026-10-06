@@ -217,7 +217,7 @@ function render(chars, rate, box) {
       <div class="hero"><span class="num">${pct.toFixed(3)}</span><span class="unit">%</span></div>
       <div class="bar"><div style="width:${Math.min(100, pct)}%"></div></div>
       <div class="stats">
-        <div class="stat key"><div class="label">レベルアップまで</div><div class="value">${etaTxt}</div></div>
+        <div class="stat key"><div class="label">レベルアップまで（実測）</div><div class="value">${etaTxt}</div></div>
         <div class="stat"><div class="label">1時間あたり</div><div class="value">${gainTxt}</div></div>
         <div class="stat"><div class="label">経験値倍率</div><div class="value">${rateTxt}</div>${rateSub}</div>
         <div class="stat"><div class="label">現在経験値</div><div class="value">${fmtInt(L.cur)}</div></div>
@@ -230,7 +230,7 @@ function render(chars, rate, box) {
         <div class="stat"><div class="label">1日使用量</div><div class="value">${bx.perDay ? `${bx.perDay.toFixed(2)} 箱` : "計測中"}</div>${bx.run ? `<div class="sub">稼働 ${bx.run.hours.toFixed(1)} 時間/日（直近${bx.run.days < 1 ? `${Math.round(bx.run.days * 24)}時間` : `${bx.run.days.toFixed(1)}日`}）</div>` : ""}${bx.full ? `<div class="sub">24時間なら ${bx.full.toFixed(2)} 箱</div>` : ""}</div>
         <div class="stat"><div class="label">1日予想</div><div class="value">${bx.dayPct != null ? `${bx.dayPct.toFixed(2)} %` : "計測中"}</div></div>
         <div class="stat"><div class="label">次レベルまでの総日数</div><div class="value">${bx.totalDays != null ? `${Math.round(bx.totalDays)} 日` : "計測中"}</div><div class="sub">0%から100%まで</div></div>
-        <div class="stat key"><div class="label">到達日数</div><div class="value">${bx.reachDays != null ? `${bx.reachDays.toFixed(1)} 日` : "計測中"}</div>${bx.reachDays != null && bx.reachDays < 3650 ? `<div class="sub">${(d => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`)(new Date(Date.now() + bx.reachDays * DAY))} ごろ（${rateLabel}のまま）</div>` : ""}</div>
+        <div class="stat key"><div class="label">到達日数（箱の計算）</div><div class="value">${bx.reachDays != null ? `${bx.reachDays.toFixed(1)} 日` : "計測中"}</div>${bx.reachDays != null && bx.reachDays < 3650 ? `<div class="sub">${(d => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`)(new Date(Date.now() + bx.reachDays * DAY))} ごろ（${rateLabel}のまま）</div>` : ""}</div>
         <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(bx.per) : "未設定"}</div></div>
       </div>
       <details class="box-set"><summary>箱の設定を変える</summary>
