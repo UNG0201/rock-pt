@@ -110,6 +110,21 @@
 const DB = "https://rock-pt-default-rtdb.firebaseio.com";
 const HOUR = 3600 * 1000, DAY = 24 * HOUR;
 const OFF_GAP = 12 * HOUR;
+// Weekly maintenance (Wednesday 10:00-15:00 JST): a gap between two records that overlaps it
+// is left out entirely (from the last record before to the first record after the maintenance).
+const MAINT = { dow: 3, from: 10, to: 15 };
+function maintMs(a, b) {
+  if (b <= a) return 0;
+  const J = 9 * HOUR;                         // JST = UTC+9
+  let total = 0;
+  let day = Math.floor((a + J) / DAY) * DAY;  // JST midnight of a (as a shifted timestamp)
+  for (; day <= b + J; day += DAY) {
+    if (new Date(day).getUTCDay() !== MAINT.dow) continue;
+    const s = day - J + MAINT.from * HOUR, e = day - J + MAINT.to * HOUR;
+    total += Math.max(0, Math.min(b, e) - Math.max(a, s));
+  }
+  return total > 0 ? b - a : 0;
+}
 const RANGES = { "24時間": DAY, "7日": 7 * DAY, "30日": 30 * DAY };
 let currentRange = "7日";
 const charts = {};
@@ -167,7 +182,7 @@ function hourlyGain(log, latest) {
     for (let i = 1; i < pts.length; i++) {
       const gap = pts[i].t - pts[i - 1].t;
       if (gap >= OFF_GAP) continue;
-      gain += pts[i].cur - pts[i - 1].cur; ms += gap;
+      gain += pts[i].cur - pts[i - 1].cur; ms += gap - maintMs(pts[i - 1].t, pts[i].t);
     }
     const hours = ms / HOUR;
     if (hours < 0.5) continue;
@@ -188,11 +203,11 @@ function runHoursPerDay(log) {
   for (let i = 1; i < pts.length; i++) {
     const gap = pts[i].t - pts[i - 1].t;
     if (gap >= OFF_GAP) continue;          // rest period: not counted at all
-    span += gap;
+    span += gap - maintMs(pts[i - 1].t, pts[i].t);
     if (gap <= RUN_GAP) run += gap;
   }
   const tail = now - pts[pts.length - 1].t;
-  if (tail < OFF_GAP) { span += tail; if (tail <= RUN_GAP) run += tail; }
+  if (tail < OFF_GAP) { span += tail - maintMs(now - tail, now); if (tail <= RUN_GAP) run += tail; }
   if (span < HOUR) return null;
   return { hours: run / span * 24, days: span / DAY };
 }
@@ -281,7 +296,7 @@ function render(chars, rate, box) {
         </div>
       </div>
       <div class="chart-box"><canvas aria-label="経験値の推移"></canvas></div>
-      <div class="note">点線は記録を始める前の推定です（シートの記録とサーバー倍率から計算）。レベルが上がった時点で%は0に戻ります。予想日数は現在のレベルでの直近の稼ぎから計算しています。</div>
+      <div class="note">毎週水曜の定期メンテナンス（前後の記録の間まるごと）と、12時間以上の休みは計算から外しています。点線は記録を始める前の推定です（シートの記録とサーバー倍率から計算）。レベルが上がった時点で%は0に戻ります。予想日数は現在のレベルでの直近の稼ぎから計算しています。</div>
       <details><summary>記録の一覧（直近20件）</summary><div class="tbl"></div></details>`;
     root.appendChild(card);
 
