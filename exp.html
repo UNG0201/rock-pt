@@ -446,11 +446,14 @@ async function load() {
         getJson(`exp/${id}/ss.json`).catch(() => null)
       ]);
       if (!latest) continue;
-      const raw = Object.values(logObj || {}).filter(e => e && e.t).sort((a, b) => a.t - b.t);
+      const raw = Object.values(logObj || {})
+        .filter(e => e && e.t && Number.isFinite(e.cur) && Number.isFinite(e.next) && e.next > 0)
+        .sort((a, b) => a.t - b.t);
       const log = dropMisreads(raw);
       // if the latest reading itself was a misread, show the last good record instead
       let L = latest;
-      if (log.length && !log.some(e => e.t === latest.t)) L = { ...log[log.length - 1], name: latest.name };
+      if (log.length && !log.some(e => Math.abs(e.t - latest.t) < 60000 && e.cur === latest.cur))
+        L = { ...log[log.length - 1], name: latest.name };
       chars.push({ id, latest: L, log, ss });
     }
     // keep an open settings form open across the 5-minute reload
