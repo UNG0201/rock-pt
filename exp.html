@@ -62,7 +62,7 @@
   .stat .label { font-size: 12px; color: var(--text-muted); }
   .stat .value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .stat.key .value { font-size: 18px; }
-  .stat .sub { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+  .stat .sub { font-size: 11px; color: var(--text-muted); }
   .stat.key { background: var(--accent-bg); border-radius: 8px; padding: 6px 10px; }
   .chart-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin: 16px 0 8px; }
   .chart-head h2 { font-size: 15px; margin: 0; }
@@ -212,20 +212,49 @@ function runHoursPerDay(log) {
   return { hours: run / span * 24, days: span / DAY };
 }
 
+// Server rate at the time of a record. Newer records carry it; older ones were 6x
+// until the 10x apology bonus started on 10/7 15:00.
+const LEGACY_RATE_SWITCH = Date.parse("2026-10-07T15:00:00+09:00");
+function rateAt(e, nowRate) { return e.rate || (e.t < LEGACY_RATE_SWITCH ? 6 : nowRate); }
+
+function perBox(box, rv) {
+  const base = Number((box.exp || {})[rateKey(rv)]) || 0;
+  return base * scrollFactor(Number(box.scroll) || 0, rv);
+}
+
+// Measured box pace while the macro is running: EXP gained over running gaps
+// (records <= RUN_GAP apart), turned into boxes with the box EXP at that time's rate.
+function runPace(log, L, box, nowRate) {
+  const same = log.filter(e => e.lv === L.lv);
+  for (const win of [DAY, 3 * DAY, 30 * DAY]) {
+    const pts = same.filter(e => e.t >= L.t - win);
+    let boxes = 0, ms = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const gap = pts[i].t - pts[i - 1].t;
+      if (gap > RUN_GAP || maintMs(pts[i - 1].t, pts[i].t) > 0) continue;
+      const per = perBox(box, rateAt(pts[i], nowRate));
+      if (!per) continue;
+      boxes += (pts[i].cur - pts[i - 1].cur) / per; ms += gap;
+    }
+    if (ms >= HOUR / 2 && boxes > 0) return { sec: ms / 1000 / boxes, hours: ms / HOUR };
+  }
+  return null;
+}
+
 function boxStats(L, rate, box, gain, log) {
-  const sec = Number(box.sec) || 0;
-  const base = Number((box.exp || {})[rateKey(rate && rate.value)]) || 0;
+  const setSec = Number(box.sec) || 0;
   const scroll = Number(box.scroll) || 0;
   const rv = (rate && rate.value) || 1;
-  const per = base * scrollFactor(scroll, rv);
+  const base = Number((box.exp || {})[rateKey(rv)]) || 0;
+  const per = perBox(box, rv);
   const run = runHoursPerDay(log);
+  const pace = per ? runPace(log, L, box, rv) : null;
+  const sec = pace ? pace.sec : setSec;          // measured pace when available, else the setting
   const full = sec > 0 ? 86400 / sec : 0;
   const perDay = sec > 0 && run ? run.hours * 3600 / sec : 0;
   const dayPct = per && perDay ? per * perDay / L.next * 100 : null;
-  // measured: seconds per box from the real EXP gain
-  const realSec = per && gain && gain.perHour > 0 ? per / (gain.perHour / 3600) : null;
   const reachDays = per && perDay ? (L.next - L.cur) / (per * perDay) : null;
-  return { sec, base, scroll, rv, per, perDay, full, run, dayPct, totalDays: dayPct ? 100 / dayPct : null, reachDays, realSec };
+  return { sec, setSec, measured: !!pace, base, scroll, rv, per, perDay, full, run, dayPct, totalDays: dayPct ? 100 / dayPct : null, reachDays };
 }
 
 function render(chars, rate, box) {
@@ -272,7 +301,7 @@ function render(chars, rate, box) {
       </div>
       <h3 class="sec">パンドラの箱（${rateLabel}）</h3>
       <div class="stats">
-        <div class="stat"><div class="label">箱あけペース</div><div class="value">${bx.sec ? `${bx.sec} 秒毎` : "未設定"}</div>${bx.realSec ? `<div class="sub">実測 ${bx.realSec.toFixed(0)} 秒毎</div>` : ""}</div>
+        <div class="stat"><div class="label">箱あけペース${bx.measured ? "（実測）" : "（設定値）"}</div><div class="value">${bx.sec ? `${bx.sec.toFixed(bx.measured ? 1 : 0)} 秒毎` : "未設定"}</div>${bx.measured && bx.setSec ? `<div class="sub">設定 ${bx.setSec} 秒</div>` : ""}</div>
         <div class="stat"><div class="label">1日使用量</div><div class="value">${bx.perDay ? `${bx.perDay.toFixed(2)} 箱` : "計測中"}</div>${bx.run ? `<div class="sub">稼働 ${bx.run.hours.toFixed(1)} 時間/日（直近${bx.run.days < 1 ? `${Math.round(bx.run.days * 24)}時間` : `${bx.run.days.toFixed(1)}日`}）</div>` : ""}${bx.full ? `<div class="sub">24時間なら ${bx.full.toFixed(2)} 箱</div>` : ""}</div>
         <div class="stat"><div class="label">1日予想</div><div class="value">${bx.dayPct != null ? `${bx.dayPct.toFixed(2)} %` : "計測中"}</div></div>
         <div class="stat"><div class="label">次レベルまでの総日数</div><div class="value">${bx.totalDays != null ? `${Math.round(bx.totalDays)} 日` : "計測中"}</div><div class="sub">0%から100%まで</div></div>
@@ -281,7 +310,7 @@ function render(chars, rate, box) {
       </div>
       <details class="box-set"><summary>箱の設定を変える</summary>
         <form class="box-form">
-          <div><label>箱あけ秒数</label><input name="sec" type="number" inputmode="decimal" step="any" min="1" value="${bx.sec || ""}"></div>
+          <div><label>箱あけ秒数（実測が出るまで使う値）</label><input name="sec" type="number" inputmode="decimal" step="any" min="1" value="${bx.setSec || ""}"></div>
           <div><label>箱1個の経験値（${rateLabel}・呪文書100%時）</label><input name="exp" type="number" inputmode="numeric" min="0" value="${bx.base || ""}"></div>
           <div><label>使っている経験値呪文書（%）</label><input name="scroll" type="number" inputmode="numeric" min="0" step="any" value="${bx.scroll}"></div>
           <button type="submit">保存</button>
