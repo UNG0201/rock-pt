@@ -213,9 +213,9 @@ function runHoursPerDay(log) {
 }
 
 // Server rate at the time of a record. Newer records carry it; older ones were 6x
-// until the 10x apology bonus started on 10/7 15:00.
+// until the 10x apology bonus started on 10/7 (records between then and the first one with a rate are skipped).
 const LEGACY_RATE_SWITCH = Date.parse("2026-10-07T15:00:00+09:00");
-function rateAt(e, nowRate) { return e.rate || (e.t < LEGACY_RATE_SWITCH ? 6 : nowRate); }
+function rateAt(e, nowRate) { return e.rate || (e.t < LEGACY_RATE_SWITCH ? 6 : 0); }   // 0 = unknown: not used
 
 function perBox(box, rv) {
   const base = Number((box.exp || {})[rateKey(rv)]) || 0;
@@ -232,7 +232,9 @@ function runPace(log, L, box, nowRate) {
     for (let i = 1; i < pts.length; i++) {
       const gap = pts[i].t - pts[i - 1].t;
       if (gap > RUN_GAP || maintMs(pts[i - 1].t, pts[i].t) > 0) continue;
-      const per = perBox(box, rateAt(pts[i], nowRate));
+      // only the current server rate: box EXP per rate is not exact, so rates are not mixed
+      if (rateAt(pts[i], nowRate) !== nowRate || rateAt(pts[i - 1], nowRate) !== nowRate) continue;
+      const per = perBox(box, nowRate);
       if (!per) continue;
       boxes += (pts[i].cur - pts[i - 1].cur) / per; ms += gap;
     }
