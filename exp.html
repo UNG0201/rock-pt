@@ -184,8 +184,29 @@ async function getJson(path) {
   return r.json();
 }
 
-// EXP gained per hour, using the latest level only (a level-up resets current EXP)
-function hourlyGain(log, latest) {
+// Attack macro running segments sent by the PC ({s, e} in ms). When they exist,
+// only the time inside them counts as running time (macro on + game open).
+function runMsBetween(a, b, segs) {
+  let ms = 0;
+  for (const g of segs) ms += Math.max(0, Math.min(b, g.e) - Math.max(a, g.s));
+  return ms;
+}
+// time to use for the pair of records p -> q, or null to skip the pair
+//   exact (running segments exist): running time between them
+//   old records: the gap, minus maintenance; skipped for a rest period / long stop
+function pairMs(p, q, segs, maxGap) {
+  if (segs && segs.length && p.t >= segs[0].s - 5 * 60000) {
+    const ms = runMsBetween(p.t, q.t, segs);
+    return ms > 0 ? ms : null;
+  }
+  const gap = q.t - p.t;
+  if (gap >= maxGap) return null;
+  if (maxGap === RUN_GAP + 1 && maintMs(p.t, q.t) > 0) return null;
+  return gap - maintMs(p.t, q.t);
+}
+
+// EXP gained per (running) hour, using the latest level only (a level-up resets current EXP)
+function hourlyGain(log, latest, segs) {
   const same = log.filter(e => e.lv === latest.lv);
   for (const win of [DAY, 3 * DAY, 30 * DAY]) {
     const pts = same.filter(e => e.t >= latest.t - win);
@@ -193,9 +214,9 @@ function hourlyGain(log, latest) {
     // skip rest periods (no records for OFF_GAP or more, e.g. weeks without an EXP event)
     let gain = 0, ms = 0;
     for (let i = 1; i < pts.length; i++) {
-      const gap = pts[i].t - pts[i - 1].t;
-      if (gap >= OFF_GAP) continue;
-      gain += pts[i].cur - pts[i - 1].cur; ms += gap - maintMs(pts[i - 1].t, pts[i].t);
+      const m = pairMs(pts[i - 1], pts[i], segs, OFF_GAP);
+      if (m == null) continue;
+      gain += pts[i].cur - pts[i - 1].cur; ms += m;
     }
     const hours = ms / HOUR;
     if (hours < 0.5) continue;
@@ -208,8 +229,22 @@ function hourlyGain(log, latest) {
 // attack macro runs, so gaps up to RUN_GAP count as running time.
 const RUN_GAP = 45 * 60 * 1000;
 // A gap of OFF_GAP or more is a rest period: left out of all rates and daily averages.
-function runHoursPerDay(log) {
+function runHoursPerDay(log, segs) {
   const now = Date.now();
+  if (segs && segs.length) {
+    // exact: running time from the PC; rest periods and maintenance are left out of the day
+    const start = Math.max(now - 7 * DAY, segs[0].s);
+    const run = runMsBetween(start, now, segs);
+    let off = 0;
+    for (let i = 0; i < segs.length; i++) {
+      const a = Math.max(start, segs[i].e), b = i + 1 < segs.length ? segs[i + 1].s : now;
+      if (b <= a) continue;
+      if (b - a >= OFF_GAP || maintMs(a, b) > 0) off += b - a;
+    }
+    const span = now - start - off;
+    if (span < HOUR) return null;
+    return { hours: Math.min(24, run / span * 24), days: span / DAY, exact: true };
+  }
   const pts = log.filter(e => e.t >= now - 7 * DAY);
   if (pts.length < 2) return null;
   let run = 0, span = 0;
@@ -237,33 +272,32 @@ function perBox(box, rv) {
 
 // Measured box pace while the macro is running: EXP gained over running gaps
 // (records <= RUN_GAP apart), turned into boxes with the box EXP at that time's rate.
-function runPace(log, L, box, nowRate) {
+function runPace(log, L, box, nowRate, segs) {
   const same = log.filter(e => e.lv === L.lv);
   for (const win of [DAY, 3 * DAY, 30 * DAY]) {
     const pts = same.filter(e => e.t >= L.t - win);
     let boxes = 0, ms = 0;
     for (let i = 1; i < pts.length; i++) {
-      const gap = pts[i].t - pts[i - 1].t;
-      if (gap > RUN_GAP || maintMs(pts[i - 1].t, pts[i].t) > 0) continue;
+      const m = pairMs(pts[i - 1], pts[i], segs, RUN_GAP + 1);
+      if (m == null) continue;
       // only the current server rate: box EXP per rate is not exact, so rates are not mixed
       if (rateAt(pts[i], nowRate) !== nowRate || rateAt(pts[i - 1], nowRate) !== nowRate) continue;
       const per = perBox(box, nowRate);
       if (!per) continue;
-      boxes += (pts[i].cur - pts[i - 1].cur) / per; ms += gap;
+      boxes += (pts[i].cur - pts[i - 1].cur) / per; ms += m;
     }
     if (ms >= HOUR / 2 && boxes > 0) return { sec: ms / 1000 / boxes, hours: ms / HOUR };
   }
   return null;
 }
 
-function boxStats(L, rate, box, gain, log) {
+function boxStats(L, rate, box, gain, log, segs, run) {
   const setSec = Number(box.sec) || 0;
   const scroll = Number(box.scroll) || 0;
   const rv = (rate && rate.value) || 1;
   const base = Number((box.exp || {})[rateKey(rv)]) || 0;
   const per = perBox(box, rv);
-  const run = runHoursPerDay(log);
-  const pace = per ? runPace(log, L, box, rv) : null;
+  const pace = per ? runPace(log, L, box, rv, segs) : null;
   const sec = pace ? pace.sec : setSec;          // measured pace when available, else the setting
   const full = sec > 0 ? 86400 / sec : 0;
   const perDay = sec > 0 && run ? run.hours * 3600 / sec : 0;
@@ -281,17 +315,20 @@ function render(chars, rate, box) {
   root.innerHTML = "";
   for (const c of chars) {
     const L = c.latest, pct = pctOf(L);
-    const gain = hourlyGain(c.log, L);
+    const gain = hourlyGain(c.log, L, c.segs);
+    const run = runHoursPerDay(c.log, c.segs);
     let gainTxt = "計測中", etaTxt = "計測中";
     if (gain) {
       gainTxt = gain.perHour > 0 ? `${fmtJp(gain.perHour)} / 時` : "増加なし";
       if (gain.perHour > 0) {
-        const days = (L.next - L.cur) / (gain.perHour * 24);
+        // exact running time: EXP per running hour x running hours per day
+        const perDay = run && run.exact ? gain.perHour * run.hours : gain.perHour * 24;
+        const days = (L.next - L.cur) / perDay;
         etaTxt = days >= 1000 ? `${fmtInt(Math.round(days))} 日` : `${days.toFixed(1)} 日`;
       } else etaTxt = "—";
     }
     const rateTxt = rate && rate.value > 1 ? `${rate.value} 倍` : "通常（1倍）";
-    const bx = boxStats(L, rate, box, gain, c.log);
+    const bx = boxStats(L, rate, box, gain, c.log, c.segs, run);
     const rateLabel = rate && rate.value > 1 ? `${rate.value}倍` : "1倍";
     const rateSub = rate && rate.value > 1 && rate.end ? `<div class="sub">${escapeHtml(rate.end)} まで</div>` : "";
     const stale = Date.now() - L.t > 2 * HOUR
@@ -308,7 +345,7 @@ function render(chars, rate, box) {
       <div class="bar"><div style="width:${Math.min(100, pct)}%"></div></div>
       <div class="stats">
         <div class="stat key"><div class="label">レベルアップまで（実測）</div><div class="value">${etaTxt}</div></div>
-        <div class="stat"><div class="label">1時間あたり</div><div class="value">${gainTxt}</div></div>
+        <div class="stat"><div class="label">${run && run.exact ? "稼働1時間あたり" : "1時間あたり"}</div><div class="value">${gainTxt}</div></div>
         <div class="stat"><div class="label">経験値倍率</div><div class="value">${rateTxt}</div>${rateSub}</div>
         <div class="stat"><div class="label">現在経験値</div><div class="value">${fmtInt(L.cur)}</div></div>
         <div class="stat"><div class="label">次Lv経験値</div><div class="value">${fmtInt(L.next)}</div></div>
@@ -440,10 +477,11 @@ async function load() {
     const box = { sec: saved.sec ?? BOX_DEFAULT.sec, scroll: saved.scroll ?? BOX_DEFAULT.scroll, exp: { ...BOX_DEFAULT.exp, ...(saved.exp || {}) } };
     const chars = [];
     for (const id of ids) {
-      const [latest, logObj, ss] = await Promise.all([
+      const [latest, logObj, ss, runObj] = await Promise.all([
         getJson(`exp/${id}/latest.json`),
         getJson(`exp/${id}/log.json?orderBy="$key"&limitToLast=1500`),
-        getJson(`exp/${id}/ss.json`).catch(() => null)
+        getJson(`exp/${id}/ss.json`).catch(() => null),
+        getJson(`exp/${id}/run.json?orderBy="$key"&startAt="${Date.now() - 31 * DAY}"`).catch(() => null)
       ]);
       if (!latest) continue;
       const raw = Object.values(logObj || {})
@@ -454,7 +492,10 @@ async function load() {
       let L = latest;
       if (log.length && !log.some(e => Math.abs(e.t - latest.t) < 60000 && e.cur === latest.cur))
         L = { ...log[log.length - 1], name: latest.name };
-      chars.push({ id, latest: L, log, ss });
+      const segs = Object.values(runObj || {})
+        .filter(g => g && Number.isFinite(g.s) && Number.isFinite(g.e) && g.e >= g.s)
+        .sort((a, b) => a.s - b.s);
+      chars.push({ id, latest: L, log, ss, segs });
     }
     // keep an open settings form open across the 5-minute reload
     if (document.querySelector(".box-set[open]")) return;
