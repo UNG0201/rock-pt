@@ -191,18 +191,18 @@ function runMsBetween(a, b, segs) {
   for (const g of segs) ms += Math.max(0, Math.min(b, g.e) - Math.max(a, g.s));
   return ms;
 }
-// time to use for the pair of records p -> q, or null to skip the pair
-//   exact (running segments exist): running time between them
-//   old records: the gap, minus maintenance; skipped for a rest period / long stop
-function pairMs(p, q, segs, maxGap) {
+// Running time for the pair of records p -> q when it is a "clean" attack interval, else null.
+// With running segments: the macro ran at least 90% of the time between the two records
+// (intervals with a restart, party setup or other non-attack time are left out).
+// Older records: records at most RUN_GAP apart, no maintenance in between.
+function cleanMs(p, q, segs) {
+  const gap = q.t - p.t;
+  if (gap <= 0 || gap > RUN_GAP || maintMs(p.t, q.t) > 0) return null;
   if (segs && segs.length && p.t >= segs[0].s - 5 * 60000) {
     const ms = runMsBetween(p.t, q.t, segs);
-    return ms > 0 ? ms : null;
+    return ms >= gap * 0.9 ? ms : null;
   }
-  const gap = q.t - p.t;
-  if (gap >= maxGap) return null;
-  if (maxGap === RUN_GAP + 1 && maintMs(p.t, q.t) > 0) return null;
-  return gap - maintMs(p.t, q.t);
+  return gap;
 }
 
 // EXP gained per (running) hour, using the latest level only (a level-up resets current EXP)
@@ -214,7 +214,7 @@ function hourlyGain(log, latest, segs) {
     // skip rest periods (no records for OFF_GAP or more, e.g. weeks without an EXP event)
     let gain = 0, ms = 0;
     for (let i = 1; i < pts.length; i++) {
-      const m = pairMs(pts[i - 1], pts[i], segs, OFF_GAP);
+      const m = cleanMs(pts[i - 1], pts[i], segs);
       if (m == null) continue;
       gain += pts[i].cur - pts[i - 1].cur; ms += m;
     }
@@ -229,12 +229,25 @@ function hourlyGain(log, latest, segs) {
 // attack macro runs, so gaps up to RUN_GAP count as running time.
 const RUN_GAP = 45 * 60 * 1000;
 // A gap of OFF_GAP or more is a rest period: left out of all rates and daily averages.
-function runHoursPerDay(log, segs) {
+function runHoursPerDay(log, segs, perHour) {
   const now = Date.now();
   if (segs && segs.length) {
     // exact: running time from the PC; rest periods and maintenance are left out of the day
     const start = Math.max(now - 7 * DAY, segs[0].s);
-    const run = runMsBetween(start, now, segs);
+    let run = runMsBetween(start, now, segs);
+    // "attack-equivalent" time: EXP actually gained / EXP per clean attack hour.
+    // Time the macro looked busy but gained (almost) nothing is not counted.
+    if (perHour > 0) {
+      const pts = log.filter(e => e.t >= start);
+      let gain = 0;
+      for (let i = 1; i < pts.length; i++) {
+        const p = pts[i - 1], q = pts[i];
+        if (p.lv !== q.lv || q.cur < p.cur) continue;
+        if (q.t - p.t >= OFF_GAP || maintMs(p.t, q.t) > 0) continue;
+        gain += q.cur - p.cur;
+      }
+      run = Math.min(run, gain / perHour * HOUR);
+    }
     let off = 0;
     for (let i = 0; i < segs.length; i++) {
       const a = Math.max(start, segs[i].e), b = i + 1 < segs.length ? segs[i + 1].s : now;
@@ -278,7 +291,7 @@ function runPace(log, L, box, nowRate, segs) {
     const pts = same.filter(e => e.t >= L.t - win);
     let boxes = 0, ms = 0;
     for (let i = 1; i < pts.length; i++) {
-      const m = pairMs(pts[i - 1], pts[i], segs, RUN_GAP + 1);
+      const m = cleanMs(pts[i - 1], pts[i], segs);
       if (m == null) continue;
       // only the current server rate: box EXP per rate is not exact, so rates are not mixed
       if (rateAt(pts[i], nowRate) !== nowRate || rateAt(pts[i - 1], nowRate) !== nowRate) continue;
@@ -316,7 +329,7 @@ function render(chars, rate, box) {
   for (const c of chars) {
     const L = c.latest, pct = pctOf(L);
     const gain = hourlyGain(c.log, L, c.segs);
-    const run = runHoursPerDay(c.log, c.segs);
+    const run = runHoursPerDay(c.log, c.segs, gain && gain.perHour);
     let gainTxt = "計測中", etaTxt = "計測中";
     if (gain) {
       gainTxt = gain.perHour > 0 ? `${fmtJp(gain.perHour)} / 時` : "増加なし";
