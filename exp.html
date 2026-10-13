@@ -436,6 +436,14 @@ function render(chars, rate, box) {
 
 // ---- Memory of the game client / KeyToKey (sent every 5 minutes by the PC) ----
 const fmtMB = mb => mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
+// continuous running time since the process started
+function upHtml(st, at) {
+  if (!st) return "";
+  const m = Math.max(0, Math.floor(((Date.now() - at < 15 * 60000 ? Date.now() : at) - st) / 60000));
+  const d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60), mm = m % 60;
+  const txt = d ? `${d}日${h}時間` : h ? `${h}時間${mm}分` : `${mm}分`;
+  return `<div class="sub">連続稼働 <b>${txt}</b>（${fmtTime(st)} 起動）</div>`;
+}
 function memHtml(mem) {
   if (!mem || !mem.length) return "";
   const now = mem[mem.length - 1];
@@ -447,7 +455,7 @@ function memHtml(mem) {
   };
   const stat = (label, x, key) => x
     ? `<div class="stat"><div class="label">${label}</div><div class="value">${fmtMB(x.w)}</div>
-         <div class="sub">コミット ${fmtMB(x.p)}・ハンドル ${fmtInt(x.h)}</div>${trend(key, x)}</div>`
+         <div class="sub">コミット ${fmtMB(x.p)}・ハンドル ${fmtInt(x.h)}</div>${trend(key, x)}${upHtml(x.st, now.t)}</div>`
     : `<div class="stat"><div class="label">${label}</div><div class="value">起動していません</div></div>`;
   const stale = Date.now() - now.t > 15 * 60000 ? `<span class="stale">⚠ ${fmtTime(now.t)} から更新なし</span>` : "";
   return `
