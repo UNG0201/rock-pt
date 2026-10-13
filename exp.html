@@ -382,6 +382,7 @@ function render(chars, rate, box) {
           <div class="saved"></div>
         </form>
       </details>
+      ${memHtml(c.mem)}
       ${c.ss && c.ss.img ? `<figure class="ss"><img alt="ゲーム画面" src="data:image/jpeg;base64,${c.ss.img}"><figcaption>ゲーム画面 ${fmtTime(c.ss.t)} 撮影（タップで拡大）</figcaption></figure>` : ""}
       <div class="chart-head">
         <h2>経験値の推移（%）</h2>
@@ -389,7 +390,7 @@ function render(chars, rate, box) {
           ${Object.keys(RANGES).map(k => `<button type="button" data-r="${k}" aria-pressed="${k === currentRange}">${k}</button>`).join("")}
         </div>
       </div>
-      <div class="chart-box"><canvas aria-label="経験値の推移"></canvas></div>
+      <div class="chart-box"><canvas class="exp-chart" aria-label="経験値の推移"></canvas></div>
       <div class="note">毎週水曜の定期メンテナンス（前後の記録の間まるごと）と、12時間以上の休みは計算から外しています。点線は記録を始める前の推定です（シートの記録とサーバー倍率から計算）。レベルが上がった時点で%は0に戻ります。予想日数は現在のレベルでの直近の稼ぎから計算しています。</div>
       <details><summary>記録の一覧（直近20件）</summary><div class="tbl"></div></details>`;
     root.appendChild(card);
@@ -427,8 +428,65 @@ function render(chars, rate, box) {
       <tbody>${rows.map(e => `<tr><td>${fmtTime(e.t)}</td><td>${e.lv}</td><td>${pctOf(e).toFixed(3)}</td><td>${fmtInt(e.cur)}</td></tr>`).join("")}</tbody>
     </table>`;
 
-    drawChart(c.id, card.querySelector("canvas"), [...estFor(c.id, c.log), ...c.log]);
+    drawChart(c.id, card.querySelector("canvas.exp-chart"), [...estFor(c.id, c.log), ...c.log]);
+    const mc = card.querySelector("canvas.mem-chart");
+    if (mc) drawMemChart(c.id, mc, c.mem);
   }
+}
+
+// ---- Memory of the game client / KeyToKey (sent every 5 minutes by the PC) ----
+const fmtMB = mb => mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
+function memHtml(mem) {
+  if (!mem || !mem.length) return "";
+  const now = mem[mem.length - 1];
+  const dayAgo = mem.find(e => e.t >= now.t - DAY);
+  const trend = (key, cur) => {
+    if (!cur || !dayAgo || !dayAgo[key] || now.t - dayAgo.t < 6 * HOUR) return "";
+    const d = cur.w - dayAgo[key].w, hrs = (now.t - dayAgo.t) / HOUR;
+    return `<div class="sub">${hrs >= 23 ? "24時間" : `${Math.round(hrs)}時間`}で ${d >= 0 ? "+" : "−"}${fmtMB(Math.abs(d))}</div>`;
+  };
+  const stat = (label, x, key) => x
+    ? `<div class="stat"><div class="label">${label}</div><div class="value">${fmtMB(x.w)}</div>
+         <div class="sub">コミット ${fmtMB(x.p)}・ハンドル ${fmtInt(x.h)}</div>${trend(key, x)}</div>`
+    : `<div class="stat"><div class="label">${label}</div><div class="value">起動していません</div></div>`;
+  const stale = Date.now() - now.t > 15 * 60000 ? `<span class="stale">⚠ ${fmtTime(now.t)} から更新なし</span>` : "";
+  return `
+      <h3 class="sec">メモリ（PC） <span class="sub" style="font-weight:400">${fmtTime(now.t)} 時点</span> ${stale}</h3>
+      <div class="stats">
+        ${stat("ゲーム（sro_client）", now.g, "g")}
+        ${stat("KeyToKey", now.k, "k")}
+      </div>
+      ${mem.filter(e => e.g).length > 1 ? `<div class="chart-head"><h2>ゲームの使用メモリ（直近24時間）</h2></div>
+      <div class="chart-box" style="height:180px"><canvas class="mem-chart" aria-label="ゲームの使用メモリの推移"></canvas></div>` : ""}`;
+}
+
+function drawMemChart(id, canvas, mem) {
+  const from = Date.now() - DAY;
+  const data = mem.filter(e => e.t >= from && e.g).map(e => ({ x: e.t, y: e.g.w, h: e.g.h, p: e.g.p }));
+  const key = id + "-mem";
+  if (charts[key]) charts[key].destroy();
+  const series = css("--series-1"), grid = css("--grid"), muted = css("--text-muted");
+  charts[key] = new Chart(canvas, {
+    type: "line",
+    data: { datasets: [{ data, borderColor: series, backgroundColor: series, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: {
+          title: items => fmtTime(items[0].parsed.x),
+          label: item => `${fmtMB(item.parsed.y)}（コミット ${fmtMB(item.raw.p)}・ハンドル ${fmtInt(item.raw.h)}）`
+        } }
+      },
+      scales: {
+        x: { type: "linear", min: from, max: Date.now(), grid: { color: grid }, border: { display: false },
+             ticks: { color: muted, maxTicksLimit: 6, maxRotation: 0, callback: v => fmtTime(v) } },
+        y: { grid: { color: grid }, border: { display: false },
+             ticks: { color: muted, maxTicksLimit: 5, callback: v => fmtMB(v) } }
+      }
+    }
+  });
 }
 
 function drawChart(id, canvas, log) {
@@ -490,11 +548,12 @@ async function load() {
     const box = { sec: saved.sec ?? BOX_DEFAULT.sec, scroll: saved.scroll ?? BOX_DEFAULT.scroll, exp: { ...BOX_DEFAULT.exp, ...(saved.exp || {}) } };
     const chars = [];
     for (const id of ids) {
-      const [latest, logObj, ss, runObj] = await Promise.all([
+      const [latest, logObj, ss, runObj, memObj] = await Promise.all([
         getJson(`exp/${id}/latest.json`),
         getJson(`exp/${id}/log.json?orderBy="$key"&limitToLast=1500`),
         getJson(`exp/${id}/ss.json`).catch(() => null),
-        getJson(`exp/${id}/run.json?orderBy="$key"&startAt="${Date.now() - 31 * DAY}"`).catch(() => null)
+        getJson(`exp/${id}/run.json?orderBy="$key"&startAt="${Date.now() - 31 * DAY}"`).catch(() => null),
+        getJson(`exp/${id}/mem.json?orderBy="$key"&limitToLast=400`).catch(() => null)
       ]);
       if (!latest) continue;
       const raw = Object.values(logObj || {})
@@ -508,7 +567,8 @@ async function load() {
       const segs = Object.values(runObj || {})
         .filter(g => g && Number.isFinite(g.s) && Number.isFinite(g.e) && g.e >= g.s)
         .sort((a, b) => a.s - b.s);
-      chars.push({ id, latest: L, log, ss, segs });
+      const mem = Object.values(memObj || {}).filter(e => e && e.t).sort((a, b) => a.t - b.t);
+      chars.push({ id, latest: L, log, ss, segs, mem });
     }
     // keep an open settings form open across the 5-minute reload
     if (document.querySelector(".box-set[open]")) return;
