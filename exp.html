@@ -450,12 +450,12 @@ function memHtml(mem) {
   const dayAgo = mem.find(e => e.t >= now.t - DAY);
   const trend = (key, cur) => {
     if (!cur || !dayAgo || !dayAgo[key] || now.t - dayAgo.t < 6 * HOUR) return "";
-    const d = cur.w - dayAgo[key].w, hrs = (now.t - dayAgo.t) / HOUR;
+    const d = cur.p - dayAgo[key].p, hrs = (now.t - dayAgo.t) / HOUR;
     return `<div class="sub">${hrs >= 23 ? "24時間" : `${Math.round(hrs)}時間`}で ${d >= 0 ? "+" : "−"}${fmtMB(Math.abs(d))}</div>`;
   };
   const stat = (label, x, key) => x
-    ? `<div class="stat"><div class="label">${label}</div><div class="value">${fmtMB(x.w)}</div>
-         <div class="sub">コミット ${fmtMB(x.p)}・ハンドル ${fmtInt(x.h)}</div>${trend(key, x)}${upHtml(x.st, now.t)}</div>`
+    ? `<div class="stat"><div class="label">${label} コミット</div><div class="value">${fmtMB(x.p)}<span class="sub"> / 上限 約2 GB</span></div>
+         <div class="sub">ワーキングセット ${fmtMB(x.w)}・ハンドル ${fmtInt(x.h)}</div>${trend(key, x)}${upHtml(x.st, now.t)}</div>`
     : `<div class="stat"><div class="label">${label}</div><div class="value">起動していません</div></div>`;
   const stale = Date.now() - now.t > 15 * 60000 ? `<span class="stale">⚠ ${fmtTime(now.t)} から更新なし</span>` : "";
   return `
@@ -464,13 +464,13 @@ function memHtml(mem) {
         ${stat("ゲーム（sro_client）", now.g, "g")}
         ${stat("KeyToKey", now.k, "k")}
       </div>
-      ${mem.filter(e => e.g).length > 1 ? `<div class="chart-head"><h2>ゲームの使用メモリ（直近24時間）</h2></div>
-      <div class="chart-box" style="height:180px"><canvas class="mem-chart" aria-label="ゲームの使用メモリの推移"></canvas></div>` : ""}`;
+      ${mem.filter(e => e.g).length > 1 ? `<div class="chart-head"><h2>ゲームのコミットサイズ（直近24時間）</h2></div>
+      <div class="chart-box" style="height:180px"><canvas class="mem-chart" aria-label="ゲームのコミットサイズの推移"></canvas></div>` : ""}`;
 }
 
 function drawMemChart(id, canvas, mem) {
   const from = Date.now() - DAY;
-  const data = mem.filter(e => e.t >= from && e.g).map(e => ({ x: e.t, y: e.g.w, h: e.g.h, p: e.g.p }));
+  const data = mem.filter(e => e.t >= from && e.g).map(e => ({ x: e.t, y: e.g.p, h: e.g.h, w: e.g.w }));
   const key = id + "-mem";
   if (charts[key]) charts[key].destroy();
   const series = css("--series-1"), grid = css("--grid"), muted = css("--text-muted");
@@ -484,7 +484,7 @@ function drawMemChart(id, canvas, mem) {
         legend: { display: false },
         tooltip: { callbacks: {
           title: items => fmtTime(items[0].parsed.x),
-          label: item => `${fmtMB(item.parsed.y)}（コミット ${fmtMB(item.raw.p)}・ハンドル ${fmtInt(item.raw.h)}）`
+          label: item => `コミット ${fmtMB(item.parsed.y)}（ワーキングセット ${fmtMB(item.raw.w)}・ハンドル ${fmtInt(item.raw.h)}）`
         } }
       },
       scales: {
