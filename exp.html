@@ -130,12 +130,12 @@ let currentRange = "7日";
 const charts = {};
 // パンドラの箱: defaults until set on the page (from the spreadsheet: 148 s/box, 6倍 = 889,333,368 per box)
 const BOX_DEFAULT = { sec: 148, scroll: 150, exp: { "6": 889333368, "8": 1020117688, "10": 1098588284 } };
-// The box EXP values above are as measured in game with the 150% EXP scroll (経験値呪文書).
-// Measured at 6x (Silk.xlsx): no scroll 837,019,644 vs 150% scroll 889,333,368 = x1.0625,
-// so each 100% of scroll adds 1/24 of the no-scroll value. Other scrolls scale by
-// (24 + scroll/100) / (24 + 1.5).
-const BOX_BASE_SCROLL = 150;
-const scrollFactor = (s) => (24 + (Number(s) || 0) / 100) / (24 + BOX_BASE_SCROLL / 100);
+// The box EXP values above are as measured in game with the 100% EXP scroll (経験値呪文書).
+// Measured at 6x (Silk.xlsx): no scroll 837,019,644 vs 100% scroll 889,333,368 = x1.0625,
+// so each 100% of scroll adds 1/16 of the no-scroll value. Other scrolls scale by
+// (16 + scroll/100) / (16 + 1).
+const BOX_BASE_SCROLL = 100;
+const scrollFactor = (s) => (16 + (Number(s) || 0) / 100) / (16 + BOX_BASE_SCROLL / 100);
 // Estimated history before recording started (++エリノア++, Lv139).
 // From the spreadsheet notes: 8/20 Lv139 0%, 9/20 18%, 10/5 19:08 30.02%, 10/6 08:20 30.37%,
 // spread by the server rate: 10x until 9/2, rest 9/2-9/9, 10x 9/9-9/30, 6x after. [time ms, %]
@@ -395,12 +395,12 @@ function render(chars, rate, box) {
         <div class="stat"><div class="label">1日予想</div><div class="value">${bx.dayPct != null ? `${bx.dayPct.toFixed(2)} %` : "計測中"}</div></div>
         <div class="stat"><div class="label">次レベルまでの総日数</div><div class="value">${bx.totalDays != null ? `${Math.round(bx.totalDays)} 日` : "計測中"}</div><div class="sub">0%から100%まで</div></div>
         <div class="stat key"><div class="label">到達日数（箱の計算）</div><div class="value">${bx.reachDays != null ? `${bx.reachDays.toFixed(1)} 日` : "計測中"}</div>${bx.reachDays != null && bx.reachDays < 3650 ? `<div class="sub">${(d => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`)(new Date(Date.now() + bx.reachDays * DAY))} ごろ（${rateLabel}のまま）</div>` : ""}</div>
-        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">呪文書${bx.scroll}%（150%時の×${scrollFactor(bx.scroll).toFixed(3)}）</div>` : ""}</div>
+        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">呪文書${bx.scroll}%（100%時の×${scrollFactor(bx.scroll).toFixed(3)}）</div>` : ""}</div>
       </div>
       <details class="box-set"><summary>箱の設定を変える</summary>
         <form class="box-form">
           <div><label>箱あけ秒数（実測が出るまで使う値）</label><input name="sec" type="number" inputmode="decimal" step="any" min="1" value="${bx.setSec || ""}"></div>
-          <div><label>箱1個の経験値（${rateLabel}・呪文書150%時）</label><input name="exp" type="number" inputmode="numeric" min="0" value="${bx.base || ""}"></div>
+          <div><label>箱1個の経験値（${rateLabel}・呪文書100%時）</label><input name="exp" type="number" inputmode="numeric" min="0" value="${bx.base || ""}"></div>
           <div><label>使っている経験値呪文書（%）</label><input name="scroll" type="number" inputmode="numeric" min="0" step="any" value="${bx.scroll}"></div>
           <button type="submit">保存</button>
           <div class="saved"></div>
