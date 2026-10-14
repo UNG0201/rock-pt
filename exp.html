@@ -286,9 +286,21 @@ function runHoursPerDay(log, segs, perHour) {
 const LEGACY_RATE_SWITCH = Date.parse("2026-10-07T15:00:00+09:00");
 function rateAt(e, nowRate) { return e.rate || (e.t < LEGACY_RATE_SWITCH ? 6 : 0); }   // 0 = unknown: not used
 
-function perBox(box, rv) {
+// Scroll in use over time. Entered by hand on the page; each save is logged with its time
+// (exp/_box/scrollLog/<ms>) so a change only applies from then on. Before any log: 100% during
+// the 10x period, 150% from the 6x switch on 10/14 15:00.
+const SCROLL_SEED = { [Date.parse("2026-10-01T00:00:00+09:00")]: 100, [Date.parse("2026-10-14T15:00:00+09:00")]: 150 };
+function scrollAt(box, t) {
+  if (t == null) return Number(box.scroll) || 0;
+  const log = { ...SCROLL_SEED, ...(box.scrollLog || {}) };
+  let v = null, best = -Infinity;
+  for (const k in log) { const kt = Number(k); if (kt <= t && kt > best) { best = kt; v = Number(log[k]); } }
+  return v != null && isFinite(v) ? v : (Number(box.scroll) || 0);
+}
+// Box EXP at a rate; t = time of the play (for the scroll then), omitted = now.
+function perBox(box, rv, t) {
   const base = boxBase(box, rv);
-  return base * scrollFactor(Number(box.scroll) || 0, rv);
+  return base * scrollFactor(scrollAt(box, t), rv);
 }
 
 // Measured box pace while the macro is running: EXP gained over running gaps
@@ -303,7 +315,7 @@ function runPace(log, L, box, nowRate, segs) {
       if (m == null) continue;
       // only the current server rate: box EXP per rate is not exact, so rates are not mixed
       if (rateAt(pts[i], nowRate) !== nowRate || rateAt(pts[i - 1], nowRate) !== nowRate) continue;
-      const per = perBox(box, nowRate);
+      const per = perBox(box, nowRate, (pts[i - 1].t + pts[i].t) / 2);
       if (!per) continue;
       boxes += (pts[i].cur - pts[i - 1].cur) / per; ms += m;
     }
@@ -320,16 +332,25 @@ function pairPace(p, q, segs, box, nowRate) {
   if (m == null) return null;
   const r = rateAt(q, nowRate);
   if (!r || rateAt(p, nowRate) !== r) return null;
-  const per = perBox(box, r);
+  const per = perBox(box, r, (p.t + q.t) / 2);
   return per ? m / 1000 / ((q.cur - p.cur) / per) : null;
+}
+
+// Estimated seconds per box (from EXP gained) against the macro's box interval.
+// Shorter = EXP comes in faster than the boxes (room to shorten the interval);
+// longer = the boxes are not being used up (lengthen it).
+function paceDiff(est, set) {
+  const d = est - set;
+  if (Math.abs(d) < 2) return `${d >= 0 ? "+" : ""}${d.toFixed(1)}秒（ほぼ設定どおり）`;
+  return d < 0 ? `${d.toFixed(1)}秒（推定のほうが速い・短くできる目安）` : `+${d.toFixed(1)}秒（消化が追いついていない・延ばす目安）`;
 }
 
 function boxStats(L, rate, box, gain, log, segs, run) {
   const setSec = Number(box.sec) || 0;
-  const scroll = Number(box.scroll) || 0;
+  const scroll = scrollAt(box, Date.now());
   const rv = (rate && rate.value) || 1;
   const base = boxBase(box, rv);
-  const per = perBox(box, rv);
+  const per = perBox(box, rv);   // now, with the current scroll
   const pace = per ? runPace(log, L, box, rv, segs) : null;
   const sec = pace ? pace.sec : setSec;          // measured pace when available, else the setting
   const full = sec > 0 ? 86400 / sec : 0;
@@ -400,7 +421,7 @@ function render(chars, rate, box) {
       </div>
       <h3 class="sec">パンドラの箱（${rateLabel}）</h3>
       <div class="stats">
-        <div class="stat"><div class="label">箱あけペース${bx.measured ? "（実測）" : "（設定値）"}</div><div class="value">${bx.sec ? `${bx.sec.toFixed(bx.measured ? 1 : 0)} 秒毎` : "未設定"}</div>${bx.last ? `<div class="sub">直近2時間 ${bx.last.sec.toFixed(1)} 秒（${fmtTime(bx.last.from)}〜${fmtTime(bx.last.to).split(" ")[1]}・${bx.last.n}区間）</div>` : ""}${bx.measured && bx.setSec ? `<div class="sub">設定 ${bx.setSec} 秒</div>` : ""}</div>
+        <div class="stat"><div class="label">箱あけペース${bx.measured ? "（実測）" : "（設定値）"}</div><div class="value">${bx.sec ? `${bx.sec.toFixed(bx.measured ? 1 : 0)} 秒毎` : "未設定"}</div>${bx.last ? `<div class="sub">直近2時間 ${bx.last.sec.toFixed(1)} 秒（${fmtTime(bx.last.from)}〜${fmtTime(bx.last.to).split(" ")[1]}・${bx.last.n}区間）</div>` : ""}${bx.measured && bx.setSec ? `<div class="sub">設定 ${bx.setSec} 秒との差 ${paceDiff(bx.sec, bx.setSec)}</div>` : ""}${bx.last && bx.setSec ? `<div class="sub">直近2時間の差 ${paceDiff(bx.last.sec, bx.setSec)}</div>` : ""}</div>
         <div class="stat"><div class="label">1日使用量</div><div class="value">${bx.perDay ? `${bx.perDay.toFixed(2)} 箱` : "計測中"}</div>${bx.run ? `<div class="sub">稼働 ${bx.run.hours.toFixed(1)} 時間/日（直近${bx.run.days < 1 ? `${Math.round(bx.run.days * 24)}時間` : `${bx.run.days.toFixed(1)}日`}）</div>` : ""}${bx.full ? `<div class="sub">24時間なら ${bx.full.toFixed(2)} 箱</div>` : ""}</div>
         <div class="stat"><div class="label">1日予想</div><div class="value">${bx.dayPct != null ? `${bx.dayPct.toFixed(2)} %` : "計測中"}</div></div>
         <div class="stat"><div class="label">次レベルまでの総日数</div><div class="value">${bx.totalDays != null ? `${Math.round(bx.totalDays)} 日` : "計測中"}</div><div class="sub">0%から100%まで</div></div>
@@ -409,9 +430,9 @@ function render(chars, rate, box) {
       </div>
       <details class="box-set"><summary>箱の設定を変える</summary>
         <form class="box-form">
-          <div><label>箱あけ秒数（実測が出るまで使う値）</label><input name="sec" type="number" inputmode="decimal" step="any" min="1" value="${bx.setSec || ""}"></div>
+          <div><label>箱あけ秒数（マクロの設定値）</label><input name="sec" type="number" inputmode="decimal" step="any" min="1" value="${bx.setSec || ""}"></div>
           <div><label>箱1個の経験値（${rateLabel}・呪文書100%時）</label><input name="exp" type="number" inputmode="numeric" min="0" value="${bx.base || ""}"></div>
-          <div><label>使っている経験値呪文書（%）</label><input name="scroll" type="number" inputmode="numeric" min="0" step="any" value="${bx.scroll}"></div>
+          <div><label>使っている経験値呪文書（%・変えたら入力、入力した時刻から反映）</label><input name="scroll" type="number" inputmode="numeric" min="0" step="any" value="${bx.scroll}"></div>
           <button type="submit">保存</button>
           <div class="saved"></div>
         </form>
@@ -449,8 +470,14 @@ function render(chars, rate, box) {
       try {
         await putJson("exp/_box/sec.json", sec);
         await putJson(`exp/_box/exp/${rateKey(rate && rate.value)}.json`, exp);
-        await putJson("exp/_box/scroll.json", scroll >= 0 ? scroll : 0);
-        box.scroll = scroll >= 0 ? scroll : 0;
+        const sc = scroll >= 0 ? scroll : 0;
+        if (sc !== scrollAt(box, Date.now())) {
+          const now = Date.now();
+          await putJson(`exp/_box/scrollLog/${now}.json`, sc);
+          box.scrollLog = { ...(box.scrollLog || {}), [now]: sc };
+        }
+        await putJson("exp/_box/scroll.json", sc);
+        box.scroll = sc;
         box.sec = sec; box.exp = { ...(box.exp || {}), [rateKey(rate && rate.value)]: exp };
         render(chars, rate, box);
       } catch (e) { msg.textContent = `保存できませんでした（${e.message}）`; }
@@ -591,7 +618,7 @@ async function load() {
     const ids = Object.keys(top).filter(k => !k.startsWith("_"));
     const rate = await getJson("exp/_rate.json").catch(() => null);
     const saved = await getJson("exp/_box.json").catch(() => null) || {};
-    const box = { sec: saved.sec ?? BOX_DEFAULT.sec, scroll: saved.scroll ?? BOX_DEFAULT.scroll, exp: { ...BOX_DEFAULT.exp, ...(saved.exp || {}) } };
+    const box = { sec: saved.sec ?? BOX_DEFAULT.sec, scroll: saved.scroll ?? BOX_DEFAULT.scroll, exp: { ...BOX_DEFAULT.exp, ...(saved.exp || {}) }, scrollLog: saved.scrollLog || {} };
     const chars = [];
     for (const id of ids) {
       const [latest, logObj, ss, runObj, memObj] = await Promise.all([
