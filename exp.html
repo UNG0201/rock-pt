@@ -129,13 +129,23 @@ const RANGES = { "24時間": DAY, "7日": 7 * DAY, "30日": 30 * DAY };
 let currentRange = "7日";
 const charts = {};
 // パンドラの箱: defaults until set on the page (from the spreadsheet: 148 s/box, 6倍 = 889,333,368 per box)
-const BOX_DEFAULT = { sec: 148, scroll: 150, exp: { "6": 889333368, "8": 1020117688, "10": 1098588284 } };
+const BOX_DEFAULT = { sec: 148, scroll: 150, exp: { "6": 889333368, "10": 1098588284 } };
 // The box EXP values above are as measured in game with the 100% EXP scroll (経験値呪文書).
-// Measured at 6x (Silk.xlsx): no scroll 837,019,644 vs 100% scroll 889,333,368 = x1.0625,
-// so each 100% of scroll adds 1/16 of the no-scroll value. Other scrolls scale by
-// (16 + scroll/100) / (16 + 1).
-const BOX_BASE_SCROLL = 100;
-const scrollFactor = (s) => (16 + (Number(s) || 0) / 100) / (16 + BOX_BASE_SCROLL / 100);
+// Box EXP scales with the total EXP multiplier: server rate + 1000% booster (+10) + scroll.
+// Checked against Silk.xlsx: 6x no scroll 837,019,644 : 6x 889,333,368 : 10x 1,098,588,284
+// = 16 : 17 : 21 exactly.
+const BOOSTER = 10, BOX_BASE_SCROLL = 100;
+const totalMul = (s, r) => (Number(r) || 1) + BOOSTER + (Number(s) || 0) / 100;
+const scrollFactor = (s, r) => totalMul(s, r) / totalMul(BOX_BASE_SCROLL, r);
+// Box EXP (at 100% scroll) for a rate: the stored value, or scaled from another stored rate.
+function boxBase(box, rv) {
+  const ex = box.exp || {}, own = Number(ex[rateKey(rv)]);
+  if (own > 0) return own;
+  for (const k of ["6", "10", ...Object.keys(ex)]) {
+    const v = Number(ex[k]); if (v > 0) return v / totalMul(BOX_BASE_SCROLL, Number(k.replace("_", "."))) * totalMul(BOX_BASE_SCROLL, rv);
+  }
+  return 0;
+}
 // Estimated history before recording started (++エリノア++, Lv139).
 // From the spreadsheet notes: 8/20 Lv139 0%, 9/20 18%, 10/5 19:08 30.02%, 10/6 08:20 30.37%,
 // spread by the server rate: 10x until 9/2, rest 9/2-9/9, 10x 9/9-9/30, 6x after. [time ms, %]
@@ -277,8 +287,8 @@ const LEGACY_RATE_SWITCH = Date.parse("2026-10-07T15:00:00+09:00");
 function rateAt(e, nowRate) { return e.rate || (e.t < LEGACY_RATE_SWITCH ? 6 : 0); }   // 0 = unknown: not used
 
 function perBox(box, rv) {
-  const base = Number((box.exp || {})[rateKey(rv)]) || 0;
-  return base * scrollFactor(Number(box.scroll) || 0);
+  const base = boxBase(box, rv);
+  return base * scrollFactor(Number(box.scroll) || 0, rv);
 }
 
 // Measured box pace while the macro is running: EXP gained over running gaps
@@ -318,7 +328,7 @@ function boxStats(L, rate, box, gain, log, segs, run) {
   const setSec = Number(box.sec) || 0;
   const scroll = Number(box.scroll) || 0;
   const rv = (rate && rate.value) || 1;
-  const base = Number((box.exp || {})[rateKey(rv)]) || 0;
+  const base = boxBase(box, rv);
   const per = perBox(box, rv);
   const pace = per ? runPace(log, L, box, rv, segs) : null;
   const sec = pace ? pace.sec : setSec;          // measured pace when available, else the setting
@@ -395,7 +405,7 @@ function render(chars, rate, box) {
         <div class="stat"><div class="label">1日予想</div><div class="value">${bx.dayPct != null ? `${bx.dayPct.toFixed(2)} %` : "計測中"}</div></div>
         <div class="stat"><div class="label">次レベルまでの総日数</div><div class="value">${bx.totalDays != null ? `${Math.round(bx.totalDays)} 日` : "計測中"}</div><div class="sub">0%から100%まで</div></div>
         <div class="stat key"><div class="label">到達日数（箱の計算）</div><div class="value">${bx.reachDays != null ? `${bx.reachDays.toFixed(1)} 日` : "計測中"}</div>${bx.reachDays != null && bx.reachDays < 3650 ? `<div class="sub">${(d => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`)(new Date(Date.now() + bx.reachDays * DAY))} ごろ（${rateLabel}のまま）</div>` : ""}</div>
-        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">呪文書${bx.scroll}%（100%時の×${scrollFactor(bx.scroll).toFixed(3)}）</div>` : ""}</div>
+        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">サーバー${bx.rv}倍＋ブースタ1000%＋呪文書${bx.scroll}%＝計${+totalMul(bx.scroll, bx.rv).toFixed(2)}倍（100%時の×${scrollFactor(bx.scroll, bx.rv).toFixed(3)}）</div>` : ""}</div>
       </div>
       <details class="box-set"><summary>箱の設定を変える</summary>
         <form class="box-form">
