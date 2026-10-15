@@ -361,7 +361,8 @@ function boxStats(L, rate, box, gain, log, segs, run) {
     }
     if (n) last = { sec: secs / boxes, from, to, n };
   }
-  return { sec, setSec, measured: !!pace, last, base, scroll, rv, per, perDay, full, run, dayPct, totalDays: dayPct ? 100 / dayPct : null, reachDays };
+  const totalBoxes = per ? L.next / per : null, leftBoxes = per ? Math.max(0, L.next - L.cur) / per : null;
+  return { sec, setSec, measured: !!pace, last, base, scroll, rv, per, perDay, full, run, dayPct, totalDays: dayPct ? 100 / dayPct : null, reachDays, totalBoxes, leftBoxes };
 }
 
 function render(chars, rate, box) {
@@ -415,6 +416,8 @@ function render(chars, rate, box) {
         <div class="stat"><div class="label">1日使用量</div><div class="value">${bx.perDay ? `${bx.perDay.toFixed(2)} 箱` : "計測中"}</div>${bx.run ? `<div class="sub">稼働 ${bx.run.hours.toFixed(1)} 時間/日（直近${bx.run.days < 1 ? `${Math.round(bx.run.days * 24)}時間` : `${bx.run.days.toFixed(1)}日`}）</div>` : ""}${bx.full ? `<div class="sub">24時間なら ${bx.full.toFixed(2)} 箱</div>` : ""}</div>
         <div class="stat"><div class="label">1日予想</div><div class="value">${bx.dayPct != null ? `${bx.dayPct.toFixed(2)} %` : "計測中"}</div></div>
         <div class="stat"><div class="label">次レベルまでの総日数</div><div class="value">${bx.totalDays != null ? `${Math.round(bx.totalDays)} 日` : "計測中"}</div><div class="sub">0%から100%まで</div></div>
+        <div class="stat"><div class="label">次レベルまでの箱の総量</div><div class="value">${bx.totalBoxes != null ? `${fmtInt(Math.ceil(bx.totalBoxes))} 箱` : "未設定"}</div><div class="sub">0%から100%まで</div></div>
+        <div class="stat"><div class="label">あと何箱</div><div class="value">${bx.leftBoxes != null ? `${fmtInt(Math.ceil(bx.leftBoxes))} 箱` : "未設定"}</div>${bx.totalBoxes ? `<div class="sub">使用済み ${fmtInt(Math.floor(bx.totalBoxes - bx.leftBoxes))} 箱（${((1 - bx.leftBoxes / bx.totalBoxes) * 100).toFixed(2)}%）</div>` : ""}</div>
         <div class="stat key"><div class="label">到達日数（箱の計算）</div><div class="value">${bx.reachDays != null ? `${bx.reachDays.toFixed(1)} 日` : "計測中"}</div>${bx.reachDays != null && bx.reachDays < 3650 ? `<div class="sub">${(d => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`)(new Date(Date.now() + bx.reachDays * DAY))} ごろ（${rateLabel}のまま）</div>` : ""}</div>
         <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">サーバー${bx.rv}倍＋ブースタ1000%＋呪文書${bx.scroll}%＝計${+totalMul(bx.scroll, bx.rv).toFixed(2)}倍（6倍・呪文書なし×${(totalMul(bx.scroll, bx.rv) / totalMul(0, BASE_RATE)).toFixed(4)}）</div>` : ""}</div>
       </div>
