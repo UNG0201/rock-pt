@@ -129,23 +129,14 @@ const RANGES = { "24時間": DAY, "7日": 7 * DAY, "30日": 30 * DAY };
 let currentRange = "7日";
 const charts = {};
 // パンドラの箱: defaults until set on the page (from the spreadsheet: 148 s/box, 6倍 = 889,333,368 per box)
-const BOX_DEFAULT = { sec: 148, scroll: 150, exp: { "6": 889333368, "10": 1098588284 } };
-// The box EXP values above are as measured in game with the 100% EXP scroll (経験値呪文書).
-// Box EXP scales with the total EXP multiplier: server rate + 1000% booster (+10) + scroll.
-// Checked against Silk.xlsx: 6x no scroll 837,019,644 : 6x 889,333,368 : 10x 1,098,588,284
-// = 16 : 17 : 21 exactly.
-const BOOSTER = 10, BOX_BASE_SCROLL = 100;
+const BOX_DEFAULT = { sec: 148, scroll: 150, base6: 837019644 };
+// Box EXP base: measured in game at 6x with no EXP scroll (経験値呪文書なし) = base6.
+// Box EXP scales with the total EXP multiplier: server rate + 1000% booster (+10) + scroll,
+// so 6x no scroll = 16 parts and any rate/scroll = base6 / 16 * (rate + 10 + scroll/100).
+// (Silk.xlsx: 6x+100% 889,333,368 and 10x+100% 1,098,588,284 are 17 and 21 parts.)
+const BOOSTER = 10, BASE_RATE = 6;
 const totalMul = (s, r) => (Number(r) || 1) + BOOSTER + (Number(s) || 0) / 100;
-const scrollFactor = (s, r) => totalMul(s, r) / totalMul(BOX_BASE_SCROLL, r);
-// Box EXP (at 100% scroll) for a rate: the stored value, or scaled from another stored rate.
-function boxBase(box, rv) {
-  const ex = box.exp || {}, own = Number(ex[rateKey(rv)]);
-  if (own > 0) return own;
-  for (const k of ["6", "10", ...Object.keys(ex)]) {
-    const v = Number(ex[k]); if (v > 0) return v / totalMul(BOX_BASE_SCROLL, Number(k.replace("_", "."))) * totalMul(BOX_BASE_SCROLL, rv);
-  }
-  return 0;
-}
+const unitExp = box => (Number(box.base6) || BOX_DEFAULT.base6) / totalMul(0, BASE_RATE);
 // Estimated history before recording started (++エリノア++, Lv139).
 // From the spreadsheet notes: 8/20 Lv139 0%, 9/20 18%, 10/5 19:08 30.02%, 10/6 08:20 30.37%,
 // spread by the server rate: 10x until 9/2, rest 9/2-9/9, 10x 9/9-9/30, 6x after. [time ms, %]
@@ -299,8 +290,7 @@ function scrollAt(box, t) {
 }
 // Box EXP at a rate; t = time of the play (for the scroll then), omitted = now.
 function perBox(box, rv, t) {
-  const base = boxBase(box, rv);
-  return base * scrollFactor(scrollAt(box, t), rv);
+  return unitExp(box) * totalMul(scrollAt(box, t), rv);
 }
 
 // Measured box pace while the macro is running: EXP gained over running gaps
@@ -349,7 +339,7 @@ function boxStats(L, rate, box, gain, log, segs, run) {
   const setSec = Number(box.sec) || 0;
   const scroll = scrollAt(box, Date.now());
   const rv = (rate && rate.value) || 1;
-  const base = boxBase(box, rv);
+  const base = Number(box.base6) || BOX_DEFAULT.base6;
   const per = perBox(box, rv);   // now, with the current scroll
   const pace = per ? runPace(log, L, box, rv, segs) : null;
   const sec = pace ? pace.sec : setSec;          // measured pace when available, else the setting
@@ -426,12 +416,12 @@ function render(chars, rate, box) {
         <div class="stat"><div class="label">1日予想</div><div class="value">${bx.dayPct != null ? `${bx.dayPct.toFixed(2)} %` : "計測中"}</div></div>
         <div class="stat"><div class="label">次レベルまでの総日数</div><div class="value">${bx.totalDays != null ? `${Math.round(bx.totalDays)} 日` : "計測中"}</div><div class="sub">0%から100%まで</div></div>
         <div class="stat key"><div class="label">到達日数（箱の計算）</div><div class="value">${bx.reachDays != null ? `${bx.reachDays.toFixed(1)} 日` : "計測中"}</div>${bx.reachDays != null && bx.reachDays < 3650 ? `<div class="sub">${(d => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`)(new Date(Date.now() + bx.reachDays * DAY))} ごろ（${rateLabel}のまま）</div>` : ""}</div>
-        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">サーバー${bx.rv}倍＋ブースタ1000%＋呪文書${bx.scroll}%＝計${+totalMul(bx.scroll, bx.rv).toFixed(2)}倍（100%時の×${scrollFactor(bx.scroll, bx.rv).toFixed(3)}）</div>` : ""}</div>
+        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">サーバー${bx.rv}倍＋ブースタ1000%＋呪文書${bx.scroll}%＝計${+totalMul(bx.scroll, bx.rv).toFixed(2)}倍（6倍・呪文書なし×${(totalMul(bx.scroll, bx.rv) / totalMul(0, BASE_RATE)).toFixed(4)}）</div>` : ""}</div>
       </div>
       <details class="box-set"><summary>箱の設定を変える</summary>
         <form class="box-form">
           <div><label>箱あけ秒数（マクロの設定値）</label><input name="sec" type="number" inputmode="decimal" step="any" min="1" value="${bx.setSec || ""}"></div>
-          <div><label>箱1個の経験値（${rateLabel}・呪文書100%時）</label><input name="exp" type="number" inputmode="numeric" min="0" value="${bx.base || ""}"></div>
+          <div><label>箱1個の経験値（6倍・呪文書なしの実測。他の倍率と呪文書はここから計算）</label><input name="exp" type="number" inputmode="numeric" min="0" value="${bx.base || ""}"></div>
           <div><label>使っている経験値呪文書（%・変えたら入力、入力した時刻から反映）</label><input name="scroll" type="number" inputmode="numeric" min="0" step="any" value="${bx.scroll}"></div>
           <button type="submit">保存</button>
           <div class="saved"></div>
@@ -469,7 +459,7 @@ function render(chars, rate, box) {
       msg.textContent = "保存中…";
       try {
         await putJson("exp/_box/sec.json", sec);
-        await putJson(`exp/_box/exp/${rateKey(rate && rate.value)}.json`, exp);
+        await putJson("exp/_box/base6.json", exp);
         const sc = scroll >= 0 ? scroll : 0;
         if (sc !== scrollAt(box, Date.now())) {
           const now = Date.now();
@@ -478,7 +468,7 @@ function render(chars, rate, box) {
         }
         await putJson("exp/_box/scroll.json", sc);
         box.scroll = sc;
-        box.sec = sec; box.exp = { ...(box.exp || {}), [rateKey(rate && rate.value)]: exp };
+        box.sec = sec; box.base6 = exp;
         render(chars, rate, box);
       } catch (e) { msg.textContent = `保存できませんでした（${e.message}）`; }
     });
@@ -618,7 +608,7 @@ async function load() {
     const ids = Object.keys(top).filter(k => !k.startsWith("_"));
     const rate = await getJson("exp/_rate.json").catch(() => null);
     const saved = await getJson("exp/_box.json").catch(() => null) || {};
-    const box = { sec: saved.sec ?? BOX_DEFAULT.sec, scroll: saved.scroll ?? BOX_DEFAULT.scroll, exp: { ...BOX_DEFAULT.exp, ...(saved.exp || {}) }, scrollLog: saved.scrollLog || {} };
+    const box = { sec: saved.sec ?? BOX_DEFAULT.sec, scroll: saved.scroll ?? BOX_DEFAULT.scroll, base6: saved.base6 ?? BOX_DEFAULT.base6, scrollLog: saved.scrollLog || {} };
     const chars = [];
     for (const id of ids) {
       const [latest, logObj, ss, runObj, memObj] = await Promise.all([
