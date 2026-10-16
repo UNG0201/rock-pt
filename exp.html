@@ -492,8 +492,6 @@ function render(chars, rate, box) {
     </table>`;
 
     drawChart(c.id, card.querySelector("canvas.exp-chart"), [...estFor(c.id, c.log), ...c.log]);
-    const mc = card.querySelector("canvas.mem-chart");
-    if (mc) drawMemChart(c.id, mc, c.mem);
   }
 }
 
@@ -529,38 +527,7 @@ function memHtml(mem) {
       <div class="stats">
         ${stat("ゲーム（sro_client）", now.g, "g")}
         ${stat("KeyToKey", now.k, "k")}
-      </div>
-      ${mem.filter(e => e.g).length > 1 ? `<div class="chart-head"><h2>ゲームのコミットサイズ（直近24時間）</h2></div>
-      <div class="chart-box" style="height:180px"><canvas class="mem-chart" aria-label="ゲームのコミットサイズの推移"></canvas></div>` : ""}`;
-}
-
-function drawMemChart(id, canvas, mem) {
-  const from = Date.now() - DAY;
-  const data = mem.filter(e => e.t >= from && e.g).map(e => ({ x: e.t, y: e.g.p, h: e.g.h, w: e.g.w }));
-  const key = id + "-mem";
-  if (charts[key]) charts[key].destroy();
-  const series = css("--series-1"), grid = css("--grid"), muted = css("--text-muted");
-  charts[key] = new Chart(canvas, {
-    type: "line",
-    data: { datasets: [{ data, borderColor: series, backgroundColor: series, borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: 0 }] },
-    options: {
-      responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
-      interaction: { mode: "nearest", axis: "x", intersect: false },
-      plugins: {
-        legend: { display: false },
-        tooltip: { callbacks: {
-          title: items => fmtTime(items[0].parsed.x),
-          label: item => `コミット ${fmtMB(item.parsed.y)}（ワーキングセット ${fmtMB(item.raw.w)}・ハンドル ${fmtInt(item.raw.h)}）`
-        } }
-      },
-      scales: {
-        x: { type: "linear", min: from, max: Date.now(), grid: { color: grid }, border: { display: false },
-             ticks: { color: muted, maxTicksLimit: 6, maxRotation: 0, callback: v => fmtTime(v) } },
-        y: { grid: { color: grid }, border: { display: false },
-             ticks: { color: muted, maxTicksLimit: 5, callback: v => fmtMB(v) } }
-      }
-    }
-  });
+      </div>`;
 }
 
 function drawChart(id, canvas, log) {
