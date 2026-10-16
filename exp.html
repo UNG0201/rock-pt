@@ -510,11 +510,14 @@ function upHtml(st, at) {
 function memHtml(mem) {
   if (!mem || !mem.length) return "";
   const now = mem[mem.length - 1];
-  const dayAgo = mem.find(e => e.t >= now.t - DAY);
+  // growth since the process started: compare with the first sample of this same run (same start time)
   const trend = (key, cur) => {
-    if (!cur || !dayAgo || !dayAgo[key] || now.t - dayAgo.t < 6 * HOUR) return "";
-    const d = cur.p - dayAgo[key].p, hrs = (now.t - dayAgo.t) / HOUR;
-    return `<div class="sub">${hrs >= 23 ? "24時間" : `${Math.round(hrs)}時間`}で ${d >= 0 ? "+" : "−"}${fmtMB(Math.abs(d))}</div>`;
+    if (!cur || !cur.st) return "";
+    const first = mem.find(e => e[key] && e[key].st === cur.st);
+    if (!first || first === now) return "";
+    const d = cur.p - first[key].p;
+    const late = first.t - cur.st > 15 * 60000;   // the start of this run is older than the data loaded
+    return `<div class="sub">起動してから ${d >= 0 ? "+" : "−"}${fmtMB(Math.abs(d))}${late ? `（${fmtTime(first.t)} の ${fmtMB(first[key].p)} から）` : `（起動直後 ${fmtMB(first[key].p)}）`}</div>`;
   };
   const stat = (label, x, key) => x
     ? `<div class="stat"><div class="label">${label} コミット</div><div class="value">${fmtMB(x.p)}<span class="sub"> / 上限 約2 GB</span></div>
