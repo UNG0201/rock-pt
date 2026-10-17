@@ -289,8 +289,38 @@ function scrollAt(box, t) {
   return v != null && isFinite(v) ? v : (Number(box.scroll) || 0);
 }
 // Box EXP at a rate; t = time of the play (for the scroll then), omitted = now.
-function perBox(box, rv, t) {
-  return unitExp(box) * totalMul(scrollAt(box, t), rv);
+// Special ticket (スペシャルチケット): +100% for 3 hours every day from the time it was used.
+// The start time of day is entered on the page; each change is logged (exp/_box/ticketLog/<ms>)
+// so it applies from then on. The current ticket was used on 10/11 00:31.
+const TICKET_HOURS = 3, TICKET_BONUS = 1;
+const TICKET_SEED = { [Date.parse("2026-10-11T00:31:00+09:00")]: "00:31" };
+function ticketAt(box, t) {
+  const log = { ...TICKET_SEED, ...(box.ticketLog || {}) };
+  let v = "", best = -Infinity;
+  for (const k in log) { const kt = Number(k); if (kt <= t && kt > best) { best = kt; v = log[k] || ""; } }
+  return { hm: v, since: best };
+}
+// share of [a, b] that falls inside the daily ticket window
+function ticketShare(box, a, b) {
+  if (!(b > a)) return 0;
+  const { hm, since } = ticketAt(box, b);
+  const m = /^(\d{1,2}):(\d{2})$/.exec(hm || "");
+  if (!m) return 0;
+  const off = (Number(m[1]) * 60 + Number(m[2])) * 60000;
+  const JST = 9 * HOUR;
+  const day0 = Math.floor((a + JST) / DAY) * DAY - JST;   // JST midnight on/before a
+  let inside = 0;
+  for (let d = day0 - DAY; d <= b; d += DAY) {
+    const s = Math.max(d + off, since), e = d + off + TICKET_HOURS * HOUR;
+    inside += Math.max(0, Math.min(b, e) - Math.max(a, s));
+  }
+  return inside / (b - a);
+}
+// Box EXP at a rate; [t, t2] = the play interval (scroll and ticket then), omitted = now without ticket.
+function perBox(box, rv, t, t2) {
+  const tick = t2 ? ticketShare(box, t, t2) * TICKET_BONUS : 0;
+  const mid = t2 ? (t + t2) / 2 : t;
+  return unitExp(box) * (totalMul(scrollAt(box, mid), rv) + tick);
 }
 
 // Measured box pace while the macro is running: EXP gained over running gaps
@@ -305,7 +335,7 @@ function runPace(log, L, box, nowRate, segs) {
       if (m == null) continue;
       // only the current server rate: box EXP per rate is not exact, so rates are not mixed
       if (rateAt(pts[i], nowRate) !== nowRate || rateAt(pts[i - 1], nowRate) !== nowRate) continue;
-      const per = perBox(box, nowRate, (pts[i - 1].t + pts[i].t) / 2);
+      const per = perBox(box, nowRate, pts[i - 1].t, pts[i].t);
       if (!per) continue;
       boxes += (pts[i].cur - pts[i - 1].cur) / per; ms += m;
     }
@@ -322,7 +352,7 @@ function pairPace(p, q, segs, box, nowRate) {
   if (m == null) return null;
   const r = rateAt(q, nowRate);
   if (!r || rateAt(p, nowRate) !== r) return null;
-  const per = perBox(box, r, (p.t + q.t) / 2);
+  const per = perBox(box, r, p.t, q.t);
   return per ? m / 1000 / ((q.cur - p.cur) / per) : null;
 }
 
@@ -424,13 +454,14 @@ function render(chars, rate, box) {
         <div class="stat"><div class="label">次レベルまでの箱の総量</div><div class="value">${bx.totalBoxes != null ? `${fmtInt(Math.ceil(bx.totalBoxes))} 箱` : "未設定"}</div><div class="sub">0%から100%まで（${bx.rv}倍）</div>${bx.byRate.map(o => `<div class="sub">${o.r}倍なら ${fmtInt(Math.ceil(o.total))} 箱</div>`).join("")}</div>
         <div class="stat"><div class="label">あと何箱</div><div class="value">${bx.leftBoxes != null ? `${fmtInt(Math.ceil(bx.leftBoxes))} 箱` : "未設定"}</div>${bx.totalBoxes ? `<div class="sub">使用済み ${fmtInt(Math.floor(bx.totalBoxes - bx.leftBoxes))} 箱（${((1 - bx.leftBoxes / bx.totalBoxes) * 100).toFixed(2)}%・${bx.rv}倍）</div>` : ""}${bx.byRate.map(o => `<div class="sub">${o.r}倍なら あと ${fmtInt(Math.ceil(o.left))} 箱</div>`).join("")}</div>
         <div class="stat key"><div class="label">到達日数（箱の計算）</div><div class="value">${bx.reachDays != null ? `${bx.reachDays.toFixed(1)} 日` : "計測中"}</div>${bx.reachDays != null && bx.reachDays < 3650 ? `<div class="sub">${(d => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`)(new Date(Date.now() + bx.reachDays * DAY))} ごろ（${rateLabel}のまま）</div>` : ""}</div>
-        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">サーバー${bx.rv}倍＋ブースタ1000%＋呪文書${bx.scroll}%＝計${+totalMul(bx.scroll, bx.rv).toFixed(2)}倍（6倍・呪文書なし×${(totalMul(bx.scroll, bx.rv) / totalMul(0, BASE_RATE)).toFixed(4)}）</div>` : ""}</div>
+        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">サーバー${bx.rv}倍＋ブースタ1000%＋呪文書${bx.scroll}%＝計${+totalMul(bx.scroll, bx.rv).toFixed(2)}倍（6倍・呪文書なし×${(totalMul(bx.scroll, bx.rv) / totalMul(0, BASE_RATE)).toFixed(4)}）</div>` : ""}${(tk => tk ? `<div class="sub">スペチケ 毎日 ${tk}から3時間 +100%（その時間は 計${+(totalMul(bx.scroll, bx.rv) + TICKET_BONUS).toFixed(2)}倍・ペース計算に反映）</div>` : "")(ticketAt(box, Date.now()).hm)}</div>
       </div>
       <details class="box-set"><summary>箱の設定を変える</summary>
         <form class="box-form">
           <div><label>箱あけ秒数（マクロの設定値）</label><input name="sec" type="number" inputmode="decimal" step="any" min="1" value="${bx.setSec || ""}"></div>
           <div><label>箱1個の経験値（6倍・呪文書なしの実測。他の倍率と呪文書はここから計算）</label><input name="exp" type="number" inputmode="numeric" min="0" value="${bx.base || ""}"></div>
           <div><label>使っている経験値呪文書（%・変えたら入力、入力した時刻から反映）</label><input name="scroll" type="number" inputmode="numeric" min="0" step="any" value="${bx.scroll}"></div>
+          <div><label>スペチケの発動時刻（毎日ここから3時間+100%・空欄＝なし）</label><input name="ticket" type="time" value="${escapeHtml(ticketAt(box, Date.now()).hm)}"></div>
           <button type="submit">保存</button>
           <div class="saved"></div>
         </form>
@@ -473,6 +504,12 @@ function render(chars, rate, box) {
           const now = Date.now();
           await putJson(`exp/_box/scrollLog/${now}.json`, sc);
           box.scrollLog = { ...(box.scrollLog || {}), [now]: sc };
+        }
+        const tk = (f.ticket.value || "").trim();
+        if (tk !== ticketAt(box, Date.now()).hm) {
+          const now = Date.now();
+          await putJson(`exp/_box/ticketLog/${now}.json`, tk);
+          box.ticketLog = { ...(box.ticketLog || {}), [now]: tk };
         }
         await putJson("exp/_box/scroll.json", sc);
         box.scroll = sc;
@@ -586,7 +623,7 @@ async function load() {
     const ids = Object.keys(top).filter(k => !k.startsWith("_"));
     const rate = await getJson("exp/_rate.json").catch(() => null);
     const saved = await getJson("exp/_box.json").catch(() => null) || {};
-    const box = { sec: saved.sec ?? BOX_DEFAULT.sec, scroll: saved.scroll ?? BOX_DEFAULT.scroll, base6: saved.base6 ?? BOX_DEFAULT.base6, scrollLog: saved.scrollLog || {} };
+    const box = { sec: saved.sec ?? BOX_DEFAULT.sec, scroll: saved.scroll ?? BOX_DEFAULT.scroll, base6: saved.base6 ?? BOX_DEFAULT.base6, scrollLog: saved.scrollLog || {}, ticketLog: saved.ticketLog || {} };
     const chars = [];
     for (const id of ids) {
       const [latest, logObj, ss, runObj, memObj] = await Promise.all([
