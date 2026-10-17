@@ -1,0 +1,40 @@
+# Copies the EXP tracker records from Firebase into the "data" branch,
+# so they can be read from GitHub. Runs every 6 hours and on demand.
+name: firebase-dump
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+permissions:
+  contents: write
+concurrency: firebase-dump
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch from Firebase
+        run: |
+          set -e
+          B=https://rock-pt-default-rtdb.firebaseio.com/exp
+          mkdir -p out
+          curl -fsS "$B.json?shallow=true" -o out/ids.json
+          for id in $(jq -r 'keys[] | select(startswith("_") | not)' out/ids.json); do
+            mkdir -p "out/$id"
+            curl -fsS "$B/$id/log.json" -o "out/$id/log.json"
+            curl -fsS "$B/$id/run.json" -o "out/$id/run.json"
+            curl -fsS "$B/$id/latest.json" -o "out/$id/latest.json"
+            curl -fsS "$B/$id/mem.json" -o "out/$id/mem.json"
+          done
+          curl -fsS "$B/_box.json" -o out/_box.json
+          curl -fsS "$B/_rate.json" -o out/_rate.json
+          date -u +%FT%TZ > out/fetched_at.txt
+      - name: Commit to data branch
+        run: |
+          set -e
+          cd out
+          git init -q -b data
+          git config user.name "firebase-dump"
+          git config user.email "actions@github.com"
+          git add -A
+          git commit -qm "Firebase dump $(cat fetched_at.txt)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data
