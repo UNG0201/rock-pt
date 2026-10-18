@@ -533,7 +533,7 @@ function render(chars, rate, box) {
 }
 
 // ---- Memory of the game client / KeyToKey (sent every 5 minutes by the PC) ----
-const MEM_WARN_MB = 1.8 * 1024;   // commit level to warn about (the 32-bit client crashes near 2 GB)
+const MEM_WARN_MB = 1.65 * 1024;   // commit level to warn about (PC-5 crashed at 1.67 GB on 10/16)
 const fmtMB = mb => mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
 // continuous running time since the process started
 function upHtml(st, at) {
