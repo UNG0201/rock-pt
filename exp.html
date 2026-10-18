@@ -533,6 +533,7 @@ function render(chars, rate, box) {
 }
 
 // ---- Memory of the game client / KeyToKey (sent every 5 minutes by the PC) ----
+const MEM_WARN_MB = 1.8 * 1024;   // commit level to warn about (the 32-bit client crashes near 2 GB)
 const fmtMB = mb => mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${Math.round(mb)} MB`;
 // continuous running time since the process started
 function upHtml(st, at) {
@@ -554,9 +555,20 @@ function memHtml(mem) {
     const late = first.t - cur.st > 15 * 60000;   // the start of this run is older than the data loaded
     return `<div class="sub">起動してから ${d >= 0 ? "+" : "−"}${fmtMB(Math.abs(d))}${late ? `（${fmtTime(first.t)} の ${fmtMB(first[key].p)} から）` : `（起動直後 ${fmtMB(first[key].p)}）`}</div>`;
   };
+  // when commit reaches MEM_WARN_MB at the recent growth rate (last 3 hours of this run)
+  const eta = (key, cur) => {
+    if (!cur || !cur.st) return "";
+    if (cur.p >= MEM_WARN_MB) return `<div class="sub"><b>${fmtMB(MEM_WARN_MB)} を超えています</b></div>`;
+    const run = mem.filter(e => e[key] && e[key].st === cur.st && e.t >= now.t - 3 * HOUR);
+    if (run.length < 2 || now.t - run[0].t < HOUR) return "";
+    const rate = (cur.p - run[0][key].p) / ((now.t - run[0].t) / HOUR);   // MB per hour
+    if (!(rate > 0.5)) return `<div class="sub">${fmtMB(MEM_WARN_MB)} 到達予想：増えていません</div>`;
+    const h = (MEM_WARN_MB - cur.p) / rate, at = now.t + h * HOUR;
+    return `<div class="sub">${fmtMB(MEM_WARN_MB)} 到達予想 <b>${fmtTime(at)}</b>ごろ（あと ${h < 48 ? `${h.toFixed(1)}時間` : `${(h / 24).toFixed(1)}日`}・+${Math.round(rate)} MB/時）</div>`;
+  };
   const stat = (label, x, key) => x
     ? `<div class="stat"><div class="label">${label} コミット</div><div class="value">${fmtMB(x.p)}<span class="sub"> / 上限 約2 GB</span></div>
-         <div class="sub">ワーキングセット ${fmtMB(x.w)}・ハンドル ${fmtInt(x.h)}</div>${trend(key, x)}${upHtml(x.st, now.t)}</div>`
+         <div class="sub">ワーキングセット ${fmtMB(x.w)}・ハンドル ${fmtInt(x.h)}</div>${trend(key, x)}${eta(key, x)}${upHtml(x.st, now.t)}</div>`
     : `<div class="stat"><div class="label">${label}</div><div class="value">起動していません</div></div>`;
   const stale = Date.now() - now.t > 15 * 60000 ? `<span class="stale">⚠ ${fmtTime(now.t)} から更新なし</span>` : "";
   return `
