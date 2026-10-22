@@ -681,7 +681,7 @@ async function load() {
     document.getElementById("updated").textContent = `表示更新 ${fmtTime(Date.now())}`;
     loadedOnce = true;
     setNotice("");
-    loadPcs();
+    loadPcs(chars);
     clearTimeout(retryTimer);
   } catch (e) {
     const why = e.name === "AbortError" ? "応答なし" : e.message;
@@ -699,12 +699,24 @@ async function load() {
 let loadedOnce = false, retryTimer = null;
 
 // ---- Game client memory of every PC (mem_watch.ps1 on each PC, exp/_pcs/<PC name>) ----
-async function loadPcs() {
+// PCs whose EXP watcher already sends the game memory (exp/<id>/mem, field g): shown in the same table
+function pcsFromChars(chars) {
+  return (chars || []).filter(c => c.mem && c.mem.length).map(c => {
+    const name = c.id.toUpperCase().replace(/^PC-?/, "PC-");
+    const mem = c.mem.filter(e => e.g).map(e => ({ t: e.t, ...e.g }));
+    const last = c.mem[c.mem.length - 1];
+    const now = last.g ? { t: last.t, ...last.g } : { t: last.t, none: true };
+    const first = now.st ? mem.find(e => e.st === now.st) || null : null;
+    return { name, now, first, mem };
+  });
+}
+async function loadPcs(chars) {
   const el = document.getElementById("pcs");
   try {
-    const names = Object.keys(await getJson("exp/_pcs.json?shallow=true") || {}).sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
-    if (!names.length) { el.innerHTML = ""; return; }
-    const pcs = await Promise.all(names.map(async name => {
+    const fromChars = pcsFromChars(chars);
+    const names = Object.keys(await getJson("exp/_pcs.json?shallow=true") || {})
+      .filter(n => !fromChars.some(c => c.name === n));
+    const fetched = await Promise.all(names.map(async name => {
       const [now, first, memObj] = await Promise.all([
         getJson(`exp/_pcs/${encodeURIComponent(name)}/now.json`).catch(() => null),
         getJson(`exp/_pcs/${encodeURIComponent(name)}/first.json`).catch(() => null),
@@ -713,6 +725,8 @@ async function loadPcs() {
       const mem = Object.values(memObj || {}).filter(e => e && e.t).sort((a, b) => a.t - b.t);
       return { name, now, first, mem };
     }));
+    const pcs = [...fetched, ...fromChars].sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true }));
+    if (!pcs.length) { el.innerHTML = ""; return; }
     el.innerHTML = pcsHtml(pcs);
   } catch (e) {
     if (!el.innerHTML) el.innerHTML = "";
@@ -753,7 +767,7 @@ function pcsHtml(pcs) {
       <thead><tr><th>PC</th><th>コミット</th><th>起動してから</th><th>${fmtMB(MEM_WARN_MB)} 到達予想</th><th>連続稼働</th></tr></thead>
       <tbody>${pcs.map(row).join("")}</tbody>
     </table></div>
-    <div class="note">各PCの mem_watch が5分ごとに送っています。${fmtMB(MEM_WARN_MB)} 到達予想は直近3時間の増え方から計算しています。</div>
+    <div class="note">各PCの mem_watch（PC-5はEXPの読み取り処理）が5分ごとに送っています。${fmtMB(MEM_WARN_MB)} 到達予想は直近3時間の増え方から計算しています。</div>
   </section>`;
 }
 function setNotice(html) {
