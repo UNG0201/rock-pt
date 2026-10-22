@@ -726,7 +726,7 @@ function pcsHtml(pcs) {
     if (now.none) return `<tr><td>${escapeHtml(name)}${stale}</td><td colspan="4">ゲームは起動していません<span class="sub">${fmtTime(now.t)} 時点</span></td></tr>`;
     const over = now.p >= MEM_WARN_MB;
     const since = first && first.st === now.st && first.t < now.t
-      ? `${now.p - first.p >= 0 ? "+" : "−"}${fmtMB(Math.abs(now.p - first.p))}<span class="sub">起動直後 ${fmtMB(first.p)}</span>` : "—";
+      ? `${now.p - first.p >= 0 ? "+" : "−"}${fmtMB(Math.abs(now.p - first.p))}<span class="sub">${first.t - now.st > 15 * 60000 ? `${fmtTime(first.t)} の ${fmtMB(first.p)} から` : `起動直後 ${fmtMB(first.p)}`}</span>` : "—";
     // reach MEM_WARN_MB at the growth rate of the last 3 hours of this run
     let eta = "—";
     if (over) eta = "超えています";
