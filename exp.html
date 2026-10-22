@@ -80,6 +80,10 @@
   th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--grid); }
   th:first-child, td:first-child { text-align: left; }
   .ss { margin: 16px 0 0; }
+  .pcs-wrap { overflow-x: auto; }
+  .pcs-wrap table { min-width: 520px; }
+  td.over { color: #b3261e; font-weight: 700; }
+  td .sub { display: block; font-size: 11px; color: var(--text-muted); }
   .ss img { display: block; width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); cursor: zoom-in; }
   .ss figcaption { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
   .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: none; align-items: center; justify-content: center; z-index: 10; overflow: auto; }
@@ -102,6 +106,7 @@
     <span class="updated" id="updated"></span>
   </header>
   <div id="root"><div class="msg">読み込み中…</div></div>
+  <div id="pcs"></div>
 </main>
 <div class="lightbox" id="lightbox" role="dialog" aria-label="スクリーンショット拡大"><img alt="スクリーンショット拡大"></div>
 
@@ -676,6 +681,7 @@ async function load() {
     document.getElementById("updated").textContent = `表示更新 ${fmtTime(Date.now())}`;
     loadedOnce = true;
     setNotice("");
+    loadPcs();
     clearTimeout(retryTimer);
   } catch (e) {
     const why = e.name === "AbortError" ? "応答なし" : e.message;
@@ -691,6 +697,65 @@ async function load() {
   }
 }
 let loadedOnce = false, retryTimer = null;
+
+// ---- Game client memory of every PC (mem_watch.ps1 on each PC, exp/_pcs/<PC name>) ----
+async function loadPcs() {
+  const el = document.getElementById("pcs");
+  try {
+    const names = Object.keys(await getJson("exp/_pcs.json?shallow=true") || {}).sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
+    if (!names.length) { el.innerHTML = ""; return; }
+    const pcs = await Promise.all(names.map(async name => {
+      const [now, first, memObj] = await Promise.all([
+        getJson(`exp/_pcs/${encodeURIComponent(name)}/now.json`).catch(() => null),
+        getJson(`exp/_pcs/${encodeURIComponent(name)}/first.json`).catch(() => null),
+        getJson(`exp/_pcs/${encodeURIComponent(name)}/mem.json?orderBy="$key"&limitToLast=40`).catch(() => null)
+      ]);
+      const mem = Object.values(memObj || {}).filter(e => e && e.t).sort((a, b) => a.t - b.t);
+      return { name, now, first, mem };
+    }));
+    el.innerHTML = pcsHtml(pcs);
+  } catch (e) {
+    if (!el.innerHTML) el.innerHTML = "";
+  }
+}
+function pcsHtml(pcs) {
+  const t = Date.now();
+  const row = ({ name, now, first, mem }) => {
+    if (!now) return `<tr><td>${escapeHtml(name)}</td><td colspan="4">記録なし</td></tr>`;
+    const stale = t - now.t > 15 * 60000 ? `<span class="sub stale">⚠ ${fmtTime(now.t)} から更新なし</span>` : "";
+    if (now.none) return `<tr><td>${escapeHtml(name)}${stale}</td><td colspan="4">ゲームは起動していません<span class="sub">${fmtTime(now.t)} 時点</span></td></tr>`;
+    const over = now.p >= MEM_WARN_MB;
+    const since = first && first.st === now.st && first.t < now.t
+      ? `${now.p - first.p >= 0 ? "+" : "−"}${fmtMB(Math.abs(now.p - first.p))}<span class="sub">起動直後 ${fmtMB(first.p)}</span>` : "—";
+    // reach MEM_WARN_MB at the growth rate of the last 3 hours of this run
+    let eta = "—";
+    if (over) eta = "超えています";
+    else {
+      const run = mem.filter(e => e.st === now.st && e.t >= now.t - 3 * HOUR && e.t < now.t);
+      if (run.length && now.t - run[0].t >= HOUR) {
+        const rate = (now.p - run[0].p) / ((now.t - run[0].t) / HOUR);
+        if (rate > 0.5) {
+          const h = (MEM_WARN_MB - now.p) / rate;
+          eta = `${fmtTime(now.t + h * HOUR)}<span class="sub">あと ${h < 48 ? `${h.toFixed(1)}時間` : `${(h / 24).toFixed(1)}日`}・+${Math.round(rate)} MB/時</span>`;
+        } else eta = "増えていません";
+      } else eta = "計測中";
+    }
+    const m = Math.max(0, Math.floor(((t - now.t < 15 * 60000 ? t : now.t) - now.st) / 60000));
+    const up = m >= 1440 ? `${Math.floor(m / 1440)}日${Math.floor(m % 1440 / 60)}時間` : `${Math.floor(m / 60)}時間${m % 60}分`;
+    return `<tr><td>${escapeHtml(name)}${stale}</td>
+      <td class="${over ? "over" : ""}">${fmtMB(now.p)}<span class="sub">ハンドル ${fmtInt(now.h)}</span></td>
+      <td>${since}</td><td class="${over ? "over" : ""}">${eta}</td>
+      <td>${up}<span class="sub">${fmtTime(now.st)} 起動</span></td></tr>`;
+  };
+  return `<section class="card">
+    <h3 class="sec" style="margin-top:0">各PCのゲームメモリ（sro_client コミット）</h3>
+    <div class="pcs-wrap"><table>
+      <thead><tr><th>PC</th><th>コミット</th><th>起動してから</th><th>${fmtMB(MEM_WARN_MB)} 到達予想</th><th>連続稼働</th></tr></thead>
+      <tbody>${pcs.map(row).join("")}</tbody>
+    </table></div>
+    <div class="note">各PCの mem_watch が5分ごとに送っています。${fmtMB(MEM_WARN_MB)} 到達予想は直近3時間の増え方から計算しています。</div>
+  </section>`;
+}
 function setNotice(html) {
   let n = document.getElementById("notice");
   if (!n) {
