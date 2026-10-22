@@ -27,6 +27,7 @@ jobs:
           done
           curl -fsS "$B/_box.json" -o out/_box.json
           curl -fsS "$B/_rate.json" -o out/_rate.json
+          curl -fsS "$B/_pcs.json" -o out/_pcs.json
           date -u +%FT%TZ > out/fetched_at.txt
       - name: Commit to data branch
         run: |
