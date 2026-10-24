@@ -84,6 +84,7 @@
   .pcs-wrap table { min-width: 520px; }
   td.over { color: #b3261e; font-weight: 700; }
   td .sub { display: block; font-size: 11px; color: var(--text-muted); }
+  tr.lasts td { background: rgba(76, 175, 80, 0.14); }
   .ss img { display: block; width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); cursor: zoom-in; }
   .ss figcaption { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
   .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: none; align-items: center; justify-content: center; z-index: 10; overflow: auto; }
@@ -732,6 +733,14 @@ async function loadPcs(chars) {
     if (!el.innerHTML) el.innerHTML = "";
   }
 }
+// next weekly maintenance start (Wednesday 10:00 JST) after t
+function nextMaint(t) {
+  const JST = 9 * HOUR, d = new Date(t + JST);   // JST wall clock in UTC fields
+  let m = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 10) - JST;
+  m += ((3 - d.getUTCDay() + 7) % 7) * DAY;
+  if (m <= t) m += 7 * DAY;
+  return m;
+}
 function pcsHtml(pcs) {
   const t = Date.now();
   const row = ({ name, now, first, mem }) => {
@@ -742,7 +751,7 @@ function pcsHtml(pcs) {
     const since = first && first.st === now.st && first.t < now.t
       ? `${now.p - first.p >= 0 ? "+" : "−"}${fmtMB(Math.abs(now.p - first.p))}<span class="sub">${first.t - now.st > 15 * 60000 ? `${fmtTime(first.t)} の ${fmtMB(first.p)} から` : `起動直後 ${fmtMB(first.p)}`}</span>` : "—";
     // reach MEM_WARN_MB at the growth rate of the last 3 hours of this run
-    let eta = "—";
+    let eta = "—", lasts = false;   // lasts = stays under MEM_WARN_MB until the next maintenance
     if (over) eta = "超えています";
     else {
       const run = mem.filter(e => e.st === now.st && e.t >= now.t - 3 * HOUR && e.t < now.t);
@@ -750,13 +759,14 @@ function pcsHtml(pcs) {
         const rate = (now.p - run[0].p) / ((now.t - run[0].t) / HOUR);
         if (rate > 0.5) {
           const h = (MEM_WARN_MB - now.p) / rate;
+          lasts = now.t + h * HOUR > nextMaint(now.t);
           eta = `${fmtTime(now.t + h * HOUR)}<span class="sub">あと ${h < 48 ? `${h.toFixed(1)}時間` : `${(h / 24).toFixed(1)}日`}・+${Math.round(rate)} MB/時</span>`;
-        } else eta = "増えていません";
+        } else { eta = "増えていません"; lasts = true; }
       } else eta = "計測中";
     }
     const m = Math.max(0, Math.floor(((t - now.t < 15 * 60000 ? t : now.t) - now.st) / 60000));
     const up = m >= 1440 ? `${Math.floor(m / 1440)}日${Math.floor(m % 1440 / 60)}時間` : `${Math.floor(m / 60)}時間${m % 60}分`;
-    return `<tr><td>${escapeHtml(name)}${stale}</td>
+    return `<tr class="${lasts ? "lasts" : ""}"><td>${escapeHtml(name)}${stale}${lasts ? `<span class="sub">メンテまで持つ</span>` : ""}</td>
       <td class="${over ? "over" : ""}">${fmtMB(now.p)}<span class="sub">ハンドル ${fmtInt(now.h)}</span></td>
       <td>${since}</td><td class="${over ? "over" : ""}">${eta}</td>
       <td>${up}<span class="sub">${fmtTime(now.st)} 起動</span></td></tr>`;
@@ -767,7 +777,7 @@ function pcsHtml(pcs) {
       <thead><tr><th>PC</th><th>コミット</th><th>起動してから</th><th>${fmtMB(MEM_WARN_MB)} 到達予想</th><th>連続稼働</th></tr></thead>
       <tbody>${pcs.map(row).join("")}</tbody>
     </table></div>
-    <div class="note">各PCの mem_watch（PC-5はEXPの読み取り処理）が5分ごとに送っています。${fmtMB(MEM_WARN_MB)} 到達予想は直近3時間の増え方から計算しています。</div>
+    <div class="note">各PCの mem_watch（PC-5はEXPの読み取り処理）が5分ごとに送っています。${fmtMB(MEM_WARN_MB)} 到達予想は直近3時間の増え方から計算しています。薄い緑の行は、次の水曜メンテ（10時）まで ${fmtMB(MEM_WARN_MB)} に届かない見込みのPC（毎日の再起動は不要）です。</div>
   </section>`;
 }
 function setNotice(html) {
