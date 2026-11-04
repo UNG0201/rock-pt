@@ -247,13 +247,26 @@ const RUN_GAP = 45 * 60 * 1000;
 function runHoursPerDay(log, segs, perHour) {
   const now = Date.now();
   if (segs && segs.length) {
-    // exact: running time from the PC; rest periods and maintenance are left out of the day
-    const start = Math.max(now - 7 * DAY, segs[0].s);
-    let run = runMsBetween(start, now, segs);
+    // Only the periods when EXP was being recorded count: consecutive records less than
+    // OFF_GAP apart form one active period (the open one runs to now). Days off, and short
+    // sessions on the PC without EXP records (other games, setup, etc.), are left out.
+    const pts = log.filter(e => e.t >= now - 7 * DAY);
+    if (!pts.length) return null;
+    const periods = [];
+    let ps = pts[0].t;
+    for (let i = 1; i < pts.length; i++) {
+      if (pts[i].t - pts[i - 1].t >= OFF_GAP) { periods.push([ps, pts[i - 1].t]); ps = pts[i].t; }
+    }
+    const last = pts[pts.length - 1].t;
+    periods.push([ps, now - last < OFF_GAP ? now : last]);
+    let span = 0, run = 0;
+    for (const [a, b] of periods) {
+      span += b - a - maintMs(a, b);
+      run += runMsBetween(a, b, segs);
+    }
     // "attack-equivalent" time: EXP actually gained / EXP per clean attack hour.
     // Time the macro looked busy but gained (almost) nothing is not counted.
     if (perHour > 0) {
-      const pts = log.filter(e => e.t >= start);
       let gain = 0;
       for (let i = 1; i < pts.length; i++) {
         const p = pts[i - 1], q = pts[i];
@@ -263,13 +276,6 @@ function runHoursPerDay(log, segs, perHour) {
       }
       run = Math.min(run, gain / perHour * HOUR);
     }
-    let off = 0;
-    for (let i = 0; i < segs.length; i++) {
-      const a = Math.max(start, segs[i].e), b = i + 1 < segs.length ? segs[i + 1].s : now;
-      if (b <= a) continue;
-      if (b - a >= OFF_GAP || maintMs(a, b) > 0) off += b - a;
-    }
-    const span = now - start - off;
     if (span < HOUR) return null;
     return { hours: Math.min(24, run / span * 24), days: span / DAY, exact: true };
   }
