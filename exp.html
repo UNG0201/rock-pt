@@ -311,10 +311,13 @@ function scrollAt(box, t) {
   return v != null && isFinite(v) ? v : (Number(box.scroll) || 0);
 }
 // Box EXP at a rate; t = time of the play (for the scroll then), omitted = now.
-// Special ticket (スペシャルチケット): +100% for 3 hours every day from the time it was used.
-// The start time of day is entered on the page; each change is logged (exp/_box/ticketLog/<ms>)
-// so it applies from then on. The current ticket was used on 10/11 00:31.
-const TICKET_HOURS = 3, TICKET_BONUS = 1;
+// Special ticket (スペシャルチケット, 28 days): +100% EXP while playing, 3 hours a day.
+// Every day at the time it was used, 180 minutes are added to a pool (max 360 minutes);
+// the pool is used up only while the game is played (the PC's running segments).
+// Unused time carries over, so after a day off the bonus can last up to 6 hours.
+// The time of day is entered on the page; each change is logged (exp/_box/ticketLog/<ms>)
+// and starts a new 28-day ticket from then. The current ticket was used on 10/11 00:31.
+const TICKET_BONUS = 1, TICKET_ADD_MIN = 180, TICKET_MAX_MIN = 360, TICKET_DAYS = 28;
 const TICKET_SEED = { [Date.parse("2026-10-11T00:31:00+09:00")]: "00:31" };
 function ticketAt(box, t) {
   const log = { ...TICKET_SEED, ...(box.ticketLog || {}) };
@@ -322,20 +325,59 @@ function ticketAt(box, t) {
   for (const k in log) { const kt = Number(k); if (kt <= t && kt > best) { best = kt; v = log[k] || ""; } }
   return { hm: v, since: best };
 }
-// share of [a, b] that falls inside the daily ticket window
+// Intervals [s, e] when the ticket bonus was active, simulated from the ticket log and the
+// running segments (box.onlineSegs). Cached per box until the inputs change.
+function ticketIntervals(box) {
+  const segs = box.onlineSegs || [];
+  const key = JSON.stringify(box.ticketLog || {}) + "|" + segs.length + "|" + (segs.length ? segs[segs.length - 1].e : 0);
+  if (box._tiKey === key) return box._ti;
+  const log = { ...TICKET_SEED, ...(box.ticketLog || {}) };
+  const starts = Object.keys(log).map(Number).sort((x, y) => x - y);
+  const out = [];
+  let state = null;
+  starts.forEach((st, i) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(log[st] || "");
+    if (!m) return;
+    const end = Math.min(st + TICKET_DAYS * DAY, i + 1 < starts.length ? starts[i + 1] : Infinity);
+    // refill times: the entered time of day, every day, from the day the ticket was used
+    const off = (Number(m[1]) * 60 + Number(m[2])) * 60000, JST = 9 * HOUR;
+    let refill = Math.floor((st + JST) / DAY) * DAY - JST + off;
+    if (refill > st) refill -= DAY;
+    let pool = 0, next = refill;
+    for (const g of segs) {
+      let t = Math.max(g.s, st), e2 = Math.min(g.e, end);
+      // refills that happened before this piece of play
+      while (next <= t && next < end) { pool = Math.min(TICKET_MAX_MIN, pool + TICKET_ADD_MIN) * 1; next += DAY; }
+      while (t < e2) {
+        const stop = Math.min(e2, next);
+        if (pool > 0) {
+          const use = Math.min(pool * 60000, stop - t);
+          if (use > 0) out.push([t, t + use]);
+          pool -= use / 60000;
+        }
+        t = stop;
+        if (t === next && next < end) { pool = Math.min(TICKET_MAX_MIN, pool + TICKET_ADD_MIN); next += DAY; }
+      }
+    }
+    state = { pool, next, end };
+  });
+  box._tiKey = key; box._ti = out; box._tiState = state;
+  return out;
+}
+// minutes of ticket time left now (refills after the last play included), or null without a ticket
+function ticketLeft(box, now) {
+  ticketIntervals(box);
+  const st = box._tiState;
+  if (!st || now >= st.end) return null;
+  let pool = st.pool, next = st.next;
+  while (next <= now && next < st.end) { pool = Math.min(TICKET_MAX_MIN, pool + TICKET_ADD_MIN); next += DAY; }
+  return pool;
+}
+// share of [a, b] when the ticket bonus was active
 function ticketShare(box, a, b) {
   if (!(b > a)) return 0;
-  const { hm, since } = ticketAt(box, b);
-  const m = /^(\d{1,2}):(\d{2})$/.exec(hm || "");
-  if (!m) return 0;
-  const off = (Number(m[1]) * 60 + Number(m[2])) * 60000;
-  const JST = 9 * HOUR;
-  const day0 = Math.floor((a + JST) / DAY) * DAY - JST;   // JST midnight on/before a
   let inside = 0;
-  for (let d = day0 - DAY; d <= b; d += DAY) {
-    const s = Math.max(d + off, since), e = d + off + TICKET_HOURS * HOUR;
-    inside += Math.max(0, Math.min(b, e) - Math.max(a, s));
-  }
+  for (const [s, e] of ticketIntervals(box)) inside += Math.max(0, Math.min(b, e) - Math.max(a, s));
   return inside / (b - a);
 }
 // Box EXP at a rate; [t, t2] = the play interval (scroll and ticket then), omitted = now without ticket.
@@ -476,14 +518,14 @@ function render(chars, rate, box) {
         <div class="stat"><div class="label">次レベルまでの箱の総量</div><div class="value">${bx.totalBoxes != null ? `${fmtInt(Math.ceil(bx.totalBoxes))} 箱` : "未設定"}</div><div class="sub">0%から100%まで（${bx.rv}倍）</div>${bx.byRate.map(o => `<div class="sub">${o.r}倍なら ${fmtInt(Math.ceil(o.total))} 箱</div>`).join("")}</div>
         <div class="stat"><div class="label">あと何箱</div><div class="value">${bx.leftBoxes != null ? `${fmtInt(Math.ceil(bx.leftBoxes))} 箱` : "未設定"}</div>${bx.totalBoxes ? `<div class="sub">使用済み ${fmtInt(Math.floor(bx.totalBoxes - bx.leftBoxes))} 箱（${((1 - bx.leftBoxes / bx.totalBoxes) * 100).toFixed(2)}%・${bx.rv}倍）</div>` : ""}${bx.byRate.map(o => `<div class="sub">${o.r}倍なら あと ${fmtInt(Math.ceil(o.left))} 箱</div>`).join("")}</div>
         <div class="stat key"><div class="label">到達日数（箱の計算）</div><div class="value">${bx.reachDays != null ? `${bx.reachDays.toFixed(1)} 日` : "計測中"}</div>${bx.reachDays != null && bx.reachDays < 3650 ? `<div class="sub">${(d => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`)(new Date(Date.now() + bx.reachDays * DAY))} ごろ（${rateLabel}のまま）</div>` : ""}</div>
-        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">サーバー${bx.rv}倍＋ブースタ1000%＋呪文書${bx.scroll}%＝計${+totalMul(bx.scroll, bx.rv).toFixed(2)}倍（6倍・呪文書なし×${(totalMul(bx.scroll, bx.rv) / totalMul(0, BASE_RATE)).toFixed(4)}）</div>` : ""}${(tk => tk ? `<div class="sub">スペチケ 毎日 ${tk}から3時間 +100%（その時間は 計${+(totalMul(bx.scroll, bx.rv) + TICKET_BONUS).toFixed(2)}倍・ペース計算に反映）</div>` : "")(ticketAt(box, Date.now()).hm)}</div>
+        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">サーバー${bx.rv}倍＋ブースタ1000%＋呪文書${bx.scroll}%＝計${+totalMul(bx.scroll, bx.rv).toFixed(2)}倍（6倍・呪文書なし×${(totalMul(bx.scroll, bx.rv) / totalMul(0, BASE_RATE)).toFixed(4)}）</div>` : ""}${(tk => tk ? `<div class="sub">スペチケ ${tk}から毎日3時間分 +100%（使わなかった分は最大6時間まで繰り越し・その間は 計${+(totalMul(bx.scroll, bx.rv) + TICKET_BONUS).toFixed(2)}倍・ペース計算に反映）${(left => left == null ? "（期限切れ）" : `<br>残り ${Math.floor(left / 60)}時間${Math.round(left % 60)}分${ticketIntervals(box).some(([s, e]) => e >= Date.now() - 3 * 60000) ? "（発動中）" : ""}`)(ticketLeft(box, Date.now()))}</div>` : "")(ticketAt(box, Date.now()).hm)}</div>
       </div>
       <details class="box-set"><summary>箱の設定を変える</summary>
         <form class="box-form">
           <div><label>箱あけ秒数（マクロの設定値）</label><input name="sec" type="number" inputmode="decimal" step="any" min="1" value="${bx.setSec || ""}"></div>
           <div><label>箱1個の経験値（6倍・呪文書なしの実測。他の倍率と呪文書はここから計算）</label><input name="exp" type="number" inputmode="numeric" min="0" value="${bx.base || ""}"></div>
           <div><label>使っている経験値呪文書（%・変えたら入力、入力した時刻から反映）</label><input name="scroll" type="number" inputmode="numeric" min="0" step="any" value="${bx.scroll}"></div>
-          <div><label>スペチケの発動時刻（毎日ここから3時間+100%・空欄＝なし）</label><input name="ticket" type="time" value="${escapeHtml(ticketAt(box, Date.now()).hm)}"></div>
+          <div><label>スペチケの発動時刻（毎日この時刻に3時間分追加・最大6時間・空欄＝なし）</label><input name="ticket" type="time" value="${escapeHtml(ticketAt(box, Date.now()).hm)}"></div>
           <button type="submit">保存</button>
           <div class="saved"></div>
         </form>
@@ -684,6 +726,7 @@ async function load() {
     }
     // keep an open settings form open across the 5-minute reload
     if (document.querySelector(".box-set[open]")) return;
+    box.onlineSegs = (chars[0] && chars[0].segs) || [];
     render(chars, rate, box);
     document.getElementById("updated").textContent = `表示更新 ${fmtTime(Date.now())}`;
     loadedOnce = true;
