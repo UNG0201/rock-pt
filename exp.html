@@ -464,6 +464,25 @@ function boxStats(L, rate, box, gain, log, segs, run) {
   return { sec, setSec, measured: !!pace, last, base, scroll, rv, per, perDay, full, run, dayPct, totalDays: dayPct ? 100 / dayPct : null, reachDays, totalBoxes, leftBoxes, byRate };
 }
 
+// Live countdown to the current special ticket's expiry (TICKET_DAYS after it was entered),
+// formatted like the game's own item tooltip (0日 5時間21分). Ticked every second by tickCountdowns().
+const fmtCountdown = ms => {
+  if (ms <= 0) return "期限切れ";
+  const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600);
+  const m = Math.floor(s % 3600 / 60), sec = s % 60, p = n => String(n).padStart(2, "0");
+  return `${d}日 ${h}時間${p(m)}分${p(sec)}秒`;
+};
+function ticketCountdownHtml(box) {
+  const since = ticketAt(box, Date.now()).since;
+  if (!isFinite(since)) return "";
+  const end = since + TICKET_DAYS * DAY;
+  return `<div class="sub">有効期限 ${fmtTime(end)}　残り <span class="cd" data-end="${end}">${fmtCountdown(end - Date.now())}</span></div>`;
+}
+function tickCountdowns() {
+  const now = Date.now();
+  document.querySelectorAll(".cd[data-end]").forEach(el => { el.textContent = fmtCountdown(Number(el.dataset.end) - now); });
+}
+
 function render(chars, rate, box) {
   const root = document.getElementById("root");
   if (!chars.length) {
@@ -518,7 +537,7 @@ function render(chars, rate, box) {
         <div class="stat"><div class="label">次レベルまでの箱の総量</div><div class="value">${bx.totalBoxes != null ? `${fmtInt(Math.ceil(bx.totalBoxes))} 箱` : "未設定"}</div><div class="sub">0%から100%まで（${bx.rv}倍）</div>${bx.byRate.map(o => `<div class="sub">${o.r}倍なら ${fmtInt(Math.ceil(o.total))} 箱</div>`).join("")}</div>
         <div class="stat"><div class="label">あと何箱</div><div class="value">${bx.leftBoxes != null ? `${fmtInt(Math.ceil(bx.leftBoxes))} 箱` : "未設定"}</div>${bx.totalBoxes ? `<div class="sub">使用済み ${fmtInt(Math.floor(bx.totalBoxes - bx.leftBoxes))} 箱（${((1 - bx.leftBoxes / bx.totalBoxes) * 100).toFixed(2)}%・${bx.rv}倍）</div>` : ""}${bx.byRate.map(o => `<div class="sub">${o.r}倍なら あと ${fmtInt(Math.ceil(o.left))} 箱</div>`).join("")}</div>
         <div class="stat key"><div class="label">到達日数（箱の計算）</div><div class="value">${bx.reachDays != null ? `${bx.reachDays.toFixed(1)} 日` : "計測中"}</div>${bx.reachDays != null && bx.reachDays < 3650 ? `<div class="sub">${(d => `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`)(new Date(Date.now() + bx.reachDays * DAY))} ごろ（${rateLabel}のまま）</div>` : ""}</div>
-        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">サーバー${bx.rv}倍＋ブースタ1000%＋呪文書${bx.scroll}%＝計${+totalMul(bx.scroll, bx.rv).toFixed(2)}倍（6倍・呪文書なし×${(totalMul(bx.scroll, bx.rv) / totalMul(0, BASE_RATE)).toFixed(4)}）</div>` : ""}${(tk => tk ? `<div class="sub">スペチケ ${tk}から毎日3時間分 +100%（使わなかった分は最大6時間まで繰り越し・その間は 計${+(totalMul(bx.scroll, bx.rv) + TICKET_BONUS).toFixed(2)}倍・ペース計算に反映）${(left => left == null ? "（期限切れ）" : `<br>残り ${Math.floor(left / 60)}時間${Math.round(left % 60)}分${ticketIntervals(box).some(([s, e]) => e >= Date.now() - 3 * 60000) ? "（発動中）" : ""}`)(ticketLeft(box, Date.now()))}</div>` : "")(ticketAt(box, Date.now()).hm)}</div>
+        <div class="stat"><div class="label">箱1個の経験値</div><div class="value">${bx.per ? fmtInt(Math.round(bx.per)) : "未設定"}</div>${bx.per ? `<div class="sub">サーバー${bx.rv}倍＋ブースタ1000%＋呪文書${bx.scroll}%＝計${+totalMul(bx.scroll, bx.rv).toFixed(2)}倍（6倍・呪文書なし×${(totalMul(bx.scroll, bx.rv) / totalMul(0, BASE_RATE)).toFixed(4)}）</div>` : ""}${(tk => tk ? `<div class="sub">スペチケ ${tk}から毎日3時間分 +100%（使わなかった分は最大6時間まで繰り越し・その間は 計${+(totalMul(bx.scroll, bx.rv) + TICKET_BONUS).toFixed(2)}倍・ペース計算に反映）${(left => left == null ? "（期限切れ）" : `<br>ペース計算で使える残り ${Math.floor(left / 60)}時間${Math.round(left % 60)}分${ticketIntervals(box).some(([s, e]) => e >= Date.now() - 3 * 60000) ? "（発動中）" : ""}`)(ticketLeft(box, Date.now()))}</div>` : "")(ticketAt(box, Date.now()).hm)}${ticketCountdownHtml(box)}</div>
       </div>
       <details class="box-set"><summary>箱の設定を変える</summary>
         <form class="box-form">
@@ -842,6 +861,7 @@ function setNotice(html) {
 document.getElementById("lightbox").addEventListener("click", e => e.currentTarget.classList.remove("open"));
 load();
 setInterval(load, 5 * 60 * 1000);
+setInterval(tickCountdowns, 1000);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", load);
 </script>
 </body>
