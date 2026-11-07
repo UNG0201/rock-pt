@@ -318,7 +318,11 @@ function scrollAt(box, t) {
 // The time of day is entered on the page; each change is logged (exp/_box/ticketLog/<ms>)
 // and starts a new 28-day ticket from then. The current ticket was used on 10/11 00:31.
 const TICKET_BONUS = 1, TICKET_ADD_MIN = 180, TICKET_MAX_MIN = 360, TICKET_DAYS = 28;
-const TICKET_SEED = { [Date.parse("2026-10-11T00:31:00+09:00")]: "00:31" };
+// Ticket starts (renewed 11/08 00:31 after the 10/11 ticket ran out; the latest start wins).
+const TICKET_SEED = {
+  [Date.parse("2026-10-11T00:31:00+09:00")]: "00:31",
+  [Date.parse("2026-11-08T00:31:00+09:00")]: "00:31",
+};
 function ticketAt(box, t) {
   const log = { ...TICKET_SEED, ...(box.ticketLog || {}) };
   let v = "", best = -Infinity;
