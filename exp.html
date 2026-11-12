@@ -265,9 +265,18 @@ function runHoursPerDay(log, segs, perHour) {
     periods.push([ps, now - last < OFF_GAP ? now : last]);
     let span = 0, run = 0;
     for (const [a, b] of periods) {
-      // a period can run across a maintenance: take out only the maintenance hours themselves
-      span += b - a - maintOverlap(a, b);
+      span += b - a;
       run += runMsBetween(a, b, segs);
+      // A period can run across a maintenance. The game is not started again right when the
+      // maintenance ends, so the whole gap between the last record before it and the first
+      // record after it (or now) is left out, not just the maintenance hours.
+      const inP = pts.filter(e => e.t >= a && e.t <= b).map(e => e.t);
+      if (b > inP[inP.length - 1]) inP.push(b);
+      for (let i = 1; i < inP.length; i++) {
+        if (maintOverlap(inP[i - 1], inP[i]) <= 0) continue;
+        span -= inP[i] - inP[i - 1];
+        run -= runMsBetween(inP[i - 1], inP[i], segs);
+      }
     }
     // "attack-equivalent" time: EXP actually gained / EXP per clean attack hour.
     // Time the macro looked busy but gained (almost) nothing is not counted.
