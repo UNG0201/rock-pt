@@ -121,7 +121,8 @@ const OFF_GAP = 12 * HOUR;
 // Weekly maintenance (Wednesday 10:00-15:00 JST): a gap between two records that overlaps it
 // is left out entirely (from the last record before to the first record after the maintenance).
 const MAINT = { dow: 3, from: 10, to: 15 };
-function maintMs(a, b) {
+// maintOverlap = the maintenance time inside [a, b]; maintMs = the whole gap when it overlaps.
+function maintOverlap(a, b) {
   if (b <= a) return 0;
   const J = 9 * HOUR;                         // JST = UTC+9
   let total = 0;
@@ -131,8 +132,9 @@ function maintMs(a, b) {
     const s = day - J + MAINT.from * HOUR, e = day - J + MAINT.to * HOUR;
     total += Math.max(0, Math.min(b, e) - Math.max(a, s));
   }
-  return total > 0 ? b - a : 0;
+  return total;
 }
+const maintMs = (a, b) => maintOverlap(a, b) > 0 ? b - a : 0;
 const RANGES = { "24時間": DAY, "7日": 7 * DAY, "30日": 30 * DAY };
 let currentRange = "7日";
 const charts = {};
@@ -263,7 +265,8 @@ function runHoursPerDay(log, segs, perHour) {
     periods.push([ps, now - last < OFF_GAP ? now : last]);
     let span = 0, run = 0;
     for (const [a, b] of periods) {
-      span += b - a - maintMs(a, b);
+      // a period can run across a maintenance: take out only the maintenance hours themselves
+      span += b - a - maintOverlap(a, b);
       run += runMsBetween(a, b, segs);
     }
     // "attack-equivalent" time: EXP actually gained / EXP per clean attack hour.
