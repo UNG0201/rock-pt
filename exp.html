@@ -881,6 +881,7 @@ function pcsHtml(pcs) {
 // The chimes are scheduled on the audio clock (about 7 minutes ahead, redone at every 5-minute
 // reload), so they keep their pace even when the tab is in the background.
 const SOUND_MB = 1.6 * 1024, SOUND_LABEL = "1.6 GB", SOUND_EVERY_S = 35;
+const CHIME_VOLUME = 0.04;   // loudness of the chime only (was 0.12; lowered to about a third)
 let audioCtx = null, chimeNodes = [], chimeT0 = null, soundOver = [], soundOn = true;
 try { soundOn = localStorage.getItem("expSound") !== "off"; } catch (e) {}
 function ensureAudio() {
@@ -897,7 +898,7 @@ function chimeAt(ctx, at) {
   const out = ctx.createGain();
   out.connect(ctx.destination);
   out.gain.setValueAtTime(0.0001, at);
-  out.gain.exponentialRampToValueAtTime(0.12, at + 0.01);
+  out.gain.exponentialRampToValueAtTime(CHIME_VOLUME, at + 0.01);
   out.gain.exponentialRampToValueAtTime(0.0001, at + 1.6);
   const nodes = [];
   for (const [f, v] of [[880, 1], [1760, 0.2]]) {
