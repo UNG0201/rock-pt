@@ -889,6 +889,7 @@ function ensureAudio() {
     const C = window.AudioContext || window.webkitAudioContext;
     if (!C) return null;
     audioCtx = new C();
+    audioCtx.onstatechange = renderSoundState;
   }
   if (audioCtx.state === "suspended") audioCtx.resume().then(renderSoundState, () => {});
   return audioCtx;
@@ -933,16 +934,18 @@ function renderSoundState() {
   const el = document.getElementById("sound-state");
   if (!el) return;
   const names = soundOver.map(p => `${escapeHtml(p.name)} ${fmtMB(p.now.p)}`).join("、");
-  const blocked = soundOn && soundOver.length && (!audioCtx || audioCtx.state !== "running");
+  // warn whenever sound is on but the browser has not allowed it yet, not only during an alarm,
+  // so the one click can be done in advance
+  const blocked = soundOn && (!audioCtx || audioCtx.state !== "running");
   el.innerHTML = `<button type="button" id="sound-toggle">${soundOn ? "🔔 音：オン" : "🔕 音：オフ"}</button>`
     + (soundOver.length
       ? `<span class="alarm">${names} が ${SOUND_LABEL} を超えています${soundOn ? `（${SOUND_EVERY_S}秒ごとに音）` : ""}</span>`
       : `<span class="sub">${SOUND_LABEL} を超えたら ${SOUND_EVERY_S}秒ごとに「ポーン」と鳴らします</span>`)
-    + (blocked ? `<span class="alarm">⚠ ブラウザの制限で鳴っていません。このページを1回クリックしてください</span>` : "");
+    + (blocked ? `<span class="alarm">⚠ まだ音が出せません。このページのどこかを1回クリックしてください（開き直したときだけ必要）</span>` : "");
 }
 // browsers only allow sound after the page has been clicked or typed on once
 for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => {
-  if (soundOn && (!audioCtx || audioCtx.state !== "running")) { ensureAudio(); if (soundOver.length) updateSound(soundOver); }
+  if (soundOn && (!audioCtx || audioCtx.state !== "running")) { ensureAudio(); updateSound(soundOver); }
 }, true);
 document.addEventListener("click", e => {
   if (!e.target.closest("#sound-toggle")) return;
