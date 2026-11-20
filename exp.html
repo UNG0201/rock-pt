@@ -879,7 +879,7 @@ function pcsHtml(pcs) {
 }
 // ---- Sound: one soft "pōn" at every data update (every 5 minutes) while any game client is over SOUND_MB ----
 const SOUND_MB = 1.6 * 1024, SOUND_LABEL = "1.6 GB";
-const CHIME_VOLUME = 0.004;   // loudness of the chime only (a thirtieth of the first 0.12)
+const CHIME_VOLUME = 0.012;   // loudness of the chime only (a tenth of the first 0.12; a thirtieth was too quiet)
 let audioCtx = null, soundOver = [], soundOn = true;
 try { soundOn = localStorage.getItem("expSound") !== "off"; } catch (e) {}
 function ensureAudio() {
