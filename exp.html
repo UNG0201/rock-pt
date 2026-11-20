@@ -87,6 +87,9 @@
   td.over { color: #b3261e; font-weight: 700; }
   td .sub { display: block; font-size: 11px; color: var(--text-muted); }
   tr.lasts td { background: rgba(76, 175, 80, 0.14); }
+  .sound { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 13px; }
+  .sound button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--accent-bg); color: var(--text-primary); cursor: pointer; min-height: 36px; }
+  .sound .alarm { color: #b3261e; font-weight: 600; }
   .ss img { display: block; width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--border); cursor: zoom-in; }
   .ss figcaption { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
   .lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.88); display: none; align-items: center; justify-content: center; z-index: 10; overflow: auto; }
@@ -821,6 +824,7 @@ async function loadPcs(chars) {
     const pcs = [...fetched, ...fromChars].sort((a, b) => a.name.localeCompare(b.name, "ja", { numeric: true }));
     if (!pcs.length) { el.innerHTML = ""; return; }
     el.innerHTML = pcsHtml(pcs);
+    updateSound(pcs.filter(p => p.now && !p.now.none && Date.now() - p.now.t < 15 * 60000 && p.now.p >= SOUND_MB));
   } catch (e) {
     if (!el.innerHTML) el.innerHTML = "";
   }
@@ -865,6 +869,7 @@ function pcsHtml(pcs) {
   };
   return `<section class="card">
     <h3 class="sec" style="margin-top:0">各PCのゲームメモリ（sro_client コミット）</h3>
+    <div class="sound" id="sound-state"></div>
     <div class="pcs-wrap"><table>
       <thead><tr><th>PC</th><th>コミット</th><th>起動してから</th><th>${fmtMB(MEM_WARN_MB)} 到達予想</th><th>連続稼働</th></tr></thead>
       <tbody>${pcs.map(row).join("")}</tbody>
@@ -872,6 +877,80 @@ function pcsHtml(pcs) {
     <div class="note">各PCの mem_watch（PC-5はEXPの読み取り処理）が5分ごとに送っています。${fmtMB(MEM_WARN_MB)} 到達予想は直近3時間の増え方から計算しています。薄い緑の行は、次の水曜メンテ（10時）まで ${fmtMB(MEM_WARN_MB)} に届かない見込みのPC（毎日の再起動は不要）です。</div>
   </section>`;
 }
+// ---- Sound: a soft "pōn" every SOUND_EVERY_S seconds while any game client is over SOUND_MB ----
+// The chimes are scheduled on the audio clock (about 7 minutes ahead, redone at every 5-minute
+// reload), so they keep their pace even when the tab is in the background.
+const SOUND_MB = 1.6 * 1024, SOUND_LABEL = "1.6 GB", SOUND_EVERY_S = 35;
+let audioCtx = null, chimeNodes = [], chimeT0 = null, soundOver = [], soundOn = true;
+try { soundOn = localStorage.getItem("expSound") !== "off"; } catch (e) {}
+function ensureAudio() {
+  if (!audioCtx) {
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    audioCtx = new C();
+  }
+  if (audioCtx.state === "suspended") audioCtx.resume().then(renderSoundState, () => {});
+  return audioCtx;
+}
+// 880 Hz sine with a quiet octave on top, fading out over about 1.5 seconds
+function chimeAt(ctx, at) {
+  const out = ctx.createGain();
+  out.connect(ctx.destination);
+  out.gain.setValueAtTime(0.0001, at);
+  out.gain.exponentialRampToValueAtTime(0.12, at + 0.01);
+  out.gain.exponentialRampToValueAtTime(0.0001, at + 1.6);
+  const nodes = [];
+  for (const [f, v] of [[880, 1], [1760, 0.2]]) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = "sine"; o.frequency.value = f; g.gain.value = v;
+    o.connect(g).connect(out);
+    o.start(at); o.stop(at + 1.7);
+    nodes.push(o);
+  }
+  return nodes;
+}
+function stopChimes() {
+  for (const o of chimeNodes) { try { o.stop(); } catch (e) {} }
+  chimeNodes = [];
+}
+function updateSound(over) {
+  soundOver = over;
+  stopChimes();
+  if (!over.length) chimeT0 = null;
+  if (soundOn && over.length) {
+    const ctx = ensureAudio();
+    if (ctx) {
+      const now = ctx.currentTime + 0.05;
+      if (chimeT0 === null || chimeT0 > now) chimeT0 = now;   // keep the pace while the alarm goes on
+      const k = Math.ceil((now - chimeT0) / SOUND_EVERY_S - 1e-6);
+      for (let i = 0; i < 12; i++) chimeNodes.push(...chimeAt(ctx, chimeT0 + (k + i) * SOUND_EVERY_S));
+    }
+  }
+  renderSoundState();
+}
+function renderSoundState() {
+  const el = document.getElementById("sound-state");
+  if (!el) return;
+  const names = soundOver.map(p => `${escapeHtml(p.name)} ${fmtMB(p.now.p)}`).join("、");
+  const blocked = soundOn && soundOver.length && (!audioCtx || audioCtx.state !== "running");
+  el.innerHTML = `<button type="button" id="sound-toggle">${soundOn ? "🔔 音：オン" : "🔕 音：オフ"}</button>`
+    + (soundOver.length
+      ? `<span class="alarm">${names} が ${SOUND_LABEL} を超えています${soundOn ? `（${SOUND_EVERY_S}秒ごとに音）` : ""}</span>`
+      : `<span class="sub">${SOUND_LABEL} を超えたら ${SOUND_EVERY_S}秒ごとに「ポーン」と鳴らします</span>`)
+    + (blocked ? `<span class="alarm">⚠ ブラウザの制限で鳴っていません。このページを1回クリックしてください</span>` : "");
+}
+// browsers only allow sound after the page has been clicked or typed on once
+for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => {
+  if (soundOn && (!audioCtx || audioCtx.state !== "running")) { ensureAudio(); if (soundOver.length) updateSound(soundOver); }
+}, true);
+document.addEventListener("click", e => {
+  if (!e.target.closest("#sound-toggle")) return;
+  soundOn = !soundOn;
+  try { localStorage.setItem("expSound", soundOn ? "on" : "off"); } catch (err) {}
+  if (soundOn) { const ctx = ensureAudio(); if (ctx) chimeAt(ctx, ctx.currentTime + 0.05); }   // one sample chime
+  updateSound(soundOver);
+});
+
 function setNotice(html) {
   let n = document.getElementById("notice");
   if (!n) {
