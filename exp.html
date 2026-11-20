@@ -877,12 +877,10 @@ function pcsHtml(pcs) {
     <div class="note">各PCの mem_watch（PC-5はEXPの読み取り処理）が5分ごとに送っています。${fmtMB(MEM_WARN_MB)} 到達予想は直近3時間の増え方から計算しています。薄い緑の行は、次の水曜メンテ（10時）まで ${fmtMB(MEM_WARN_MB)} に届かない見込みのPC（毎日の再起動は不要）です。</div>
   </section>`;
 }
-// ---- Sound: a soft "pōn" every SOUND_EVERY_S seconds while any game client is over SOUND_MB ----
-// The chimes are scheduled on the audio clock (about 7 minutes ahead, redone at every 5-minute
-// reload), so they keep their pace even when the tab is in the background.
-const SOUND_MB = 1.6 * 1024, SOUND_LABEL = "1.6 GB", SOUND_EVERY_S = 35;
+// ---- Sound: one soft "pōn" at every data update (every 5 minutes) while any game client is over SOUND_MB ----
+const SOUND_MB = 1.6 * 1024, SOUND_LABEL = "1.6 GB";
 const CHIME_VOLUME = 0.004;   // loudness of the chime only (a thirtieth of the first 0.12)
-let audioCtx = null, chimeNodes = [], chimeT0 = null, soundOver = [], soundOn = true;
+let audioCtx = null, soundOver = [], soundOn = true;
 try { soundOn = localStorage.getItem("expSound") !== "off"; } catch (e) {}
 function ensureAudio() {
   if (!audioCtx) {
@@ -911,22 +909,11 @@ function chimeAt(ctx, at) {
   }
   return nodes;
 }
-function stopChimes() {
-  for (const o of chimeNodes) { try { o.stop(); } catch (e) {} }
-  chimeNodes = [];
-}
-function updateSound(over) {
+function updateSound(over, chime = true) {
   soundOver = over;
-  stopChimes();
-  if (!over.length) chimeT0 = null;
-  if (soundOn && over.length) {
+  if (chime && soundOn && over.length) {
     const ctx = ensureAudio();
-    if (ctx) {
-      const now = ctx.currentTime + 0.05;
-      if (chimeT0 === null || chimeT0 > now) chimeT0 = now;   // keep the pace while the alarm goes on
-      const k = Math.ceil((now - chimeT0) / SOUND_EVERY_S - 1e-6);
-      for (let i = 0; i < 12; i++) chimeNodes.push(...chimeAt(ctx, chimeT0 + (k + i) * SOUND_EVERY_S));
-    }
+    if (ctx) chimeAt(ctx, ctx.currentTime + 0.05);
   }
   renderSoundState();
 }
@@ -939,20 +926,20 @@ function renderSoundState() {
   const blocked = soundOn && (!audioCtx || audioCtx.state !== "running");
   el.innerHTML = `<button type="button" id="sound-toggle">${soundOn ? "🔔 音：オン" : "🔕 音：オフ"}</button>`
     + (soundOver.length
-      ? `<span class="alarm">${names} が ${SOUND_LABEL} を超えています${soundOn ? `（${SOUND_EVERY_S}秒ごとに音）` : ""}</span>`
-      : `<span class="sub">${SOUND_LABEL} を超えたら ${SOUND_EVERY_S}秒ごとに「ポーン」と鳴らします</span>`)
+      ? `<span class="alarm">${names} が ${SOUND_LABEL} を超えています${soundOn ? "（データ更新ごとに音）" : ""}</span>`
+      : `<span class="sub">${SOUND_LABEL} を超えたら、5分ごとのデータ更新のたびに「ポーン」と鳴らします</span>`)
     + (blocked ? `<span class="alarm">⚠ まだ音が出せません。このページのどこかを1回クリックしてください（開き直したときだけ必要）</span>` : "");
 }
 // browsers only allow sound after the page has been clicked or typed on once
 for (const ev of ["pointerdown", "keydown"]) document.addEventListener(ev, () => {
-  if (soundOn && (!audioCtx || audioCtx.state !== "running")) { ensureAudio(); updateSound(soundOver); }
+  if (soundOn && (!audioCtx || audioCtx.state !== "running")) { ensureAudio(); renderSoundState(); }
 }, true);
 document.addEventListener("click", e => {
   if (!e.target.closest("#sound-toggle")) return;
   soundOn = !soundOn;
   try { localStorage.setItem("expSound", soundOn ? "on" : "off"); } catch (err) {}
   if (soundOn) { const ctx = ensureAudio(); if (ctx) chimeAt(ctx, ctx.currentTime + 0.05); }   // one sample chime
-  updateSound(soundOver);
+  renderSoundState();
 });
 
 function setNotice(html) {
