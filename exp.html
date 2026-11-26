@@ -232,6 +232,8 @@ function setGainRef(log, L, segs) {
   r.sort((a, b) => a - b);
   if (r.length >= 6) gainRef = r[Math.floor(r.length / 2)];
 }
+// Characters whose latest interval looks like the boxes ran out (filled by render, chimed by updateSound)
+let boxAlarm = [];
 const boxOut = (p, q, ms) => gainRef > 0 && p.lv === q.lv && (q.cur - p.cur) / ms < gainRef * BOX_OUT_RATIO;
 
 function cleanMs(p, q, segs) {
@@ -532,9 +534,17 @@ function render(chars, rate, box) {
     return;
   }
   root.innerHTML = "";
+  boxAlarm = [];
   for (const c of chars) {
     const L = c.latest, pct = pctOf(L);
     setGainRef(c.log, L, c.segs);
+    {
+      // the latest interval (records about 30 min apart) gained under half the usual EXP
+      const n = c.log.length, p = c.log[n - 2], q = c.log[n - 1];
+      const ms = p && q ? cleanMs0(p, q, c.segs) : null;
+      if (ms && Date.now() - q.t < RUN_GAP && boxOut(p, q, ms))
+        boxAlarm.push({ name: L.name || c.id, pct: Math.round((q.cur - p.cur) / ms / gainRef * 100), t: q.t });
+    }
     const gain = hourlyGain(c.log, L, c.segs);
     const run = runHoursPerDay(c.log, c.segs, gain && gain.perHour);
     let gainTxt = "計測中", etaTxt = "計測中";
@@ -933,7 +943,7 @@ function chimeAt(ctx, at) {
 }
 function updateSound(over, chime = true) {
   soundOver = over;
-  if (chime && soundOn && over.length) {
+  if (chime && soundOn && (over.length || boxAlarm.length)) {
     const ctx = ensureAudio();
     if (ctx) chimeAt(ctx, ctx.currentTime + 0.05);
   }
@@ -950,6 +960,7 @@ function renderSoundState() {
     + (soundOver.length
       ? `<span class="alarm">${names} が ${SOUND_LABEL} を超えています${soundOn ? "（データ更新ごとに音）" : ""}</span>`
       : `<span class="sub">${SOUND_LABEL} を超えたら、5分ごとのデータ更新のたびに「ポーン」と鳴らします</span>`)
+    + boxAlarm.map(a => `<span class="alarm">⚠ ${escapeHtml(a.name)}：箱切れの可能性（${fmtTime(a.t)} までの30分の経験値が普段の ${a.pct}%）${soundOn ? "（データ更新ごとに音）" : ""}</span>`).join("")
     + (blocked ? `<span class="alarm">⚠ まだ音が出せません。このページのどこかを1回クリックしてください（開き直したときだけ必要）</span>` : "");
 }
 // browsers only allow sound after the page has been clicked or typed on once
