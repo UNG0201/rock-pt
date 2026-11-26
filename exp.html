@@ -217,7 +217,28 @@ function runMsBetween(a, b, segs) {
 // With running segments: the macro ran at least 90% of the time between the two records
 // (intervals with a restart, party setup or other non-attack time are left out).
 // Older records: records at most RUN_GAP apart, no maintenance in between.
+// Typical EXP per ms over clean intervals (median, last 3 days of the latest level).
+// An interval far below it means the boxes ran out and the macro was attacking for nothing
+// (e.g. 11/26 08:31-09:10): such intervals are left out of every pace and gain figure.
+let gainRef = 0;
+const BOX_OUT_RATIO = 0.5;
+function setGainRef(log, L, segs) {
+  gainRef = 0;
+  const pts = log.filter(e => e.lv === L.lv && e.t >= L.t - 3 * DAY), r = [];
+  for (let i = 1; i < pts.length; i++) {
+    const m = cleanMs(pts[i - 1], pts[i], segs);
+    if (m) r.push((pts[i].cur - pts[i - 1].cur) / m);
+  }
+  r.sort((a, b) => a - b);
+  if (r.length >= 6) gainRef = r[Math.floor(r.length / 2)];
+}
+const boxOut = (p, q, ms) => gainRef > 0 && p.lv === q.lv && (q.cur - p.cur) / ms < gainRef * BOX_OUT_RATIO;
+
 function cleanMs(p, q, segs) {
+  const ms = cleanMs0(p, q, segs);
+  return ms != null && boxOut(p, q, ms) ? null : ms;
+}
+function cleanMs0(p, q, segs) {
   const gap = q.t - p.t;
   if (gap <= 0 || gap > RUN_GAP || maintMs(p.t, q.t) > 0) return null;
   if (segs && segs.length && p.t >= segs[0].s - 5 * 60000) {
@@ -513,6 +534,7 @@ function render(chars, rate, box) {
   root.innerHTML = "";
   for (const c of chars) {
     const L = c.latest, pct = pctOf(L);
+    setGainRef(c.log, L, c.segs);
     const gain = hourlyGain(c.log, L, c.segs);
     const run = runHoursPerDay(c.log, c.segs, gain && gain.perHour);
     let gainTxt = "計測中", etaTxt = "計測中";
